@@ -50,16 +50,22 @@ class BubFramework:
     def plugin_manager(self) -> pluggy.PluginManager:
         return self._plugin_manager
 
-    def load_builtin_hooks(self) -> None:
-        """Load Bub's builtin hook implementations."""
-        from bub.builtin.hook_impl import BuiltinImpl
+    def load_builtin_hooks(self, *, batteries: bool = False) -> None:
+        """Load Bub's builtin hook implementations.
+
+        Set ``batteries=True`` to also register the optional file tape store,
+        tool-output spill, and shell lifecycle hooks.
+        """
+        from bub.builtin.hook_impl import BatteryImpl, BuiltinImpl
 
         try:
             self._plugin_manager.register(BuiltinImpl(self), name="builtin")
+            if batteries:
+                self._plugin_manager.register(BatteryImpl(self), name="batteries")
         except Exception as exc:
             logger.warning("Failed to load builtin hooks: {}", exc)
 
-    def load_hooks(self) -> None:
+    def load_hooks(self, *, batteries: bool = False) -> None:
         """Load builtin hooks, then plugins from the ``bub`` entry-point group.
 
         Callable entry points receive this framework. A plugin that fails to load
@@ -69,7 +75,7 @@ class BubFramework:
 
         pending_plugins: list[tuple[str, Any]] = []
 
-        self.load_builtin_hooks()
+        self.load_builtin_hooks(batteries=batteries)
         for entry_point in importlib.metadata.entry_points(group="bub"):
             try:
                 plugin = entry_point.load()

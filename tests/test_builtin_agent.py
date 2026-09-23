@@ -360,41 +360,6 @@ async def test_agent_run_resolves_allowed_tool_aliases_and_limits_prompt() -> No
 
 
 @pytest.mark.asyncio
-async def test_agent_run_excludes_tools_disabled_for_agent_use() -> None:
-    visible_name = "tests.visible_agent_tool"
-    internal_name = "tests.internal_agent_tool"
-    REGISTRY.pop(visible_name, None)
-    REGISTRY.pop(internal_name, None)
-
-    @tool(name=visible_name, description="Visible tool")
-    def visible_agent_tool() -> str:
-        return "visible"
-
-    @tool(name=internal_name, description="Internal tool", agent_use=False)
-    def internal_agent_tool() -> str:
-        return "internal"
-
-    agent = _make_agent()
-    fork_capture = _ForkCapture()
-    agent.tape = _FakeTapeFactory(fork_capture)  # type: ignore[assignment]
-
-    result = await agent.run_stream(
-        session_id="user/s1",
-        prompt="hello",
-        state={"_runtime_workspace": "/tmp"},  # noqa: S108
-        allowed_tools=[visible_name, internal_name],
-    )
-    [event async for event in result]
-
-    completion_kwargs = _model_runner(agent).completion_kwargs
-    assert completion_kwargs is not None
-    assert [tool.name for tool in completion_kwargs["tools"]] == ["tests_visible_agent_tool"]
-    system_prompt = completion_kwargs["messages"][0]["content"]
-    assert "tests_visible_agent_tool" in system_prompt
-    assert "tests_internal_agent_tool" not in system_prompt
-
-
-@pytest.mark.asyncio
 async def test_agent_run_rejects_unknown_allowed_tools() -> None:
     agent = _make_agent()
     fork_capture = _ForkCapture()
@@ -410,40 +375,3 @@ async def test_agent_run_rejects_unknown_allowed_tools() -> None:
 
     with pytest.raises(ValueError, match="tests_missing_agent_tool"):
         [event async for event in stream]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("prompt", [",bash command='echo hello'", ",echo hello"])
-async def test_run_command_executes_shell_with_command_parameter(prompt: str, tmp_path) -> None:
-    agent = _make_agent()
-    agent.tape = _FakeTapeFactory(_ForkCapture())  # type: ignore[assignment]
-
-    stream = await agent.run_stream(session_id="user/s1", prompt=prompt, state={"_runtime_workspace": str(tmp_path)})
-    events = [event async for event in stream]
-
-    assert not any(event.kind == "error" for event in events)
-    assert any(event.data.get("delta") == "hello" for event in events if event.kind == "text")
-
-
-@pytest.mark.asyncio
-async def test_run_command_model_switches_session_model_directly() -> None:
-    """,model <model_id> runs the `model` builtin as a chat command with no LLM call.
-
-    The command writes state['model'] on the same state object the framework
-    hands to run_stream, so the override is picked up by run_model_stream on the
-    next turn. Persistence is a `model_switch` event the tool records on the
-    session tape (merged back at end of turn), not a side effect of save_state.
-    """
-    agent = _make_agent()
-    fork_capture = _ForkCapture()
-    agent.tape = _FakeTapeFactory(fork_capture)  # type: ignore[assignment]
-    state: dict[str, Any] = {"_runtime_workspace": "/tmp"}  # noqa: S108
-    assert "model" not in REGISTRY or REGISTRY["model"].context is True
-
-    stream = await agent.run_stream(session_id="user/s1", prompt=",model openai:gpt-4o", state=state)
-    events = [event async for event in stream]
-
-    # state["model"] is mutated in place (tool context shares the framework state).
-    assert state["model"] == "openai:gpt-4o"
-    deltas = [event.data.get("delta", "") for event in events if event.kind == "text"]
-    assert any("Session model set to openai:gpt-4o" in delta for delta in deltas)

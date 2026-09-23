@@ -41,11 +41,9 @@ def _input_audio_part(data_url: str, mime_type: str) -> dict[str, Any] | None:
 
 
 class BuiltinImpl:
-    """Default hook implementations for basic runtime operations."""
+    """Default hook implementations for the turn pipeline"""
 
     def __init__(self, framework: BubFramework) -> None:
-        from bub.builtin import spill, tools  # noqa: F401
-
         self.framework = framework
         self._agent: Agent | None = None
 
@@ -117,9 +115,6 @@ class BuiltinImpl:
     @hookimpl
     async def build_prompt(self, message: Message, session_id: str, state: TurnState) -> str | list[dict]:
         content = content_of(message)
-        if content.startswith(","):
-            message.kind = "command"
-            return content
         context = field_of(message, "context_str")
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         context_prefix = f"{context}\n---Date: {now}---\n" if context else ""
@@ -180,27 +175,6 @@ class BuiltinImpl:
         return DEFAULT_SYSTEM_PROMPT + "\n\n" + self._read_agents_file(state)
 
     @hookimpl
-    async def provide_lifespan(self) -> AsyncIterator[None]:
-        from bub.builtin.shell_manager import shell_manager
-
-        async with shell_manager.lifespan():
-            yield
-
-    @hookimpl
-    def provide_tape_store(self) -> TapeStore:
-        import bub
-        from bub.store import FileTapeStore
-
-        return FileTapeStore(directory=bub.home / "tapes")
-
-    @hookimpl
-    def provide_tape_sidecar(self) -> TapeSidecar:
-        from bub.builtin.spill import SpillSettings, SpillStore
-        from bub.configure import ensure_config
-
-        return SpillStore(ensure_config(SpillSettings))
-
-    @hookimpl
     def build_tape_context(self) -> TapeContext:
         return default_tape_context()
 
@@ -233,6 +207,40 @@ class BuiltinImpl:
         else:
             guidance = f"Tool `{call.tool}` does not exist. No similar tool is available."
         return ToolCallDecision.replace(guidance)
+
+
+class BatteryImpl:
+    """Optional builtin batteries: file tape store, tool-output spill, shell lifecycle
+
+    Register this beside ``BuiltinImpl`` to opt into the batteries; the default
+    builtin hooks keep the runtime free of them.
+    """
+
+    def __init__(self, framework: BubFramework) -> None:
+        from bub.builtin import spill, tools  # noqa: F401  importing registers the battery tools
+
+        self.framework = framework
+
+    @hookimpl
+    def provide_tape_store(self) -> TapeStore:
+        import bub
+        from bub.store import FileTapeStore
+
+        return FileTapeStore(directory=bub.home / "tapes")
+
+    @hookimpl
+    def provide_tape_sidecar(self) -> TapeSidecar:
+        from bub.builtin.spill import SpillSettings, SpillStore
+        from bub.configure import ensure_config
+
+        return SpillStore(ensure_config(SpillSettings))
+
+    @hookimpl
+    async def provide_lifespan(self) -> AsyncIterator[None]:
+        from bub.builtin.shell_manager import shell_manager
+
+        async with shell_manager.lifespan():
+            yield
 
     @hookimpl(trylast=True)
     async def after_tool_call(

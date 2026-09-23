@@ -95,7 +95,6 @@ class Tool:
     description: str = ""
     parameters: dict[str, Any] = field(default_factory=dict)
     context: bool = False
-    agent_use: bool = True
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
         return self.handler(*args, **kwargs)
@@ -119,7 +118,6 @@ class Tool:
         name: str | None = None,
         description: str | None = None,
         context: bool = False,
-        agent_use: bool = True,
     ) -> Tool:
         signature = inspect.signature(func)
         if context and "context" not in signature.parameters:
@@ -143,13 +141,95 @@ class Tool:
             parameters=parameters,
             handler=validated,
             context=context,
-            agent_use=agent_use,
         )
 
 
+def _to_model_name(name: str) -> str:
+    return name.replace(".", "_")
+
+
 def model_tools(tools: Iterable[Tool]) -> list[Tool]:
-    """Convert agent-enabled runtime tools into model-safe aliases."""
-    return [replace(tool_item, name=tool_item.name.replace(".", "_")) for tool_item in tools if tool_item.agent_use]
+    """Return the tools the model may call, with dotted names mapped to model aliases."""
+
+    return [replace(tool_item, name=_to_model_name(tool_item.name)) for tool_item in tools]
+
+
+def _tool_name_index(all_names: Iterable[str]) -> dict[str, str]:
+    names = tuple(all_names)
+    real_names = {name.casefold(): name for name in names}
+    alias_names = {_to_model_name(name).casefold(): name for name in names}
+    return {**alias_names, **real_names}
+
+
+def resolve_tool_name(name: str) -> str | None:
+    """Resolve a user- or model-provided tool name to the runtime registry name."""
+
+    key = name.strip().casefold()
+    if not key:
+        return None
+    return _tool_name_index(REGISTRY).get(key)
+
+
+def _resolve_explicit_tool_names(names: Iterable[str], index: dict[str, str]) -> tuple[set[str], set[str]]:
+    resolved: set[str] = set()
+    unknown: set[str] = set()
+    for name in names:
+        normalized_name = name.strip()
+        if resolved_name := index.get(normalized_name.casefold()):
+            resolved.add(resolved_name)
+        else:
+            unknown.add(normalized_name)
+    return resolved, unknown
+
+
+def _raise_unknown_tool_names(names: set[str]) -> None:
+    formatted = ", ".join(sorted(repr(name) for name in names))
+    raise ValueError(f"unknown tool name(s): {formatted}")
+
+
+def resolve_tool_names(
+    names: Iterable[str] | None = None, *, exclude: Iterable[str] = (), all_names: Iterable[str] | None = None
+) -> set[str]:
+    """Resolve tool names from either runtime names or model-facing aliases."""
+
+    available = tuple(REGISTRY if all_names is None else all_names)
+    index = _tool_name_index(available)
+    excluded, unknown_excluded = _resolve_explicit_tool_names(exclude, index)
+    if unknown_excluded:
+        _raise_unknown_tool_names(unknown_excluded)
+    if names is None:
+        return set(available) - excluded
+
+    resolved, unknown = _resolve_explicit_tool_names(names, index)
+    if unknown:
+        _raise_unknown_tool_names(unknown)
+    return resolved - excluded
+
+
+def _tool_signature(tool_item: Tool) -> str:
+    properties = tool_item.parameters.get("properties", {})
+    if not isinstance(properties, dict) or not properties:
+        return f"{_to_model_name(tool_item.name)}()"
+
+    required = tool_item.parameters.get("required", [])
+    required_names = set(required) if isinstance(required, list) else set()
+    params = [name if name in required_names else f"{name}?" for name in properties]
+    return f"{_to_model_name(tool_item.name)}({', '.join(params)})"
+
+
+def render_tools_prompt(tools: Iterable[Tool]) -> str:
+    """Render a human-readable description of tools for the builtin agent prompt."""
+
+    tool_list = list(tools)
+    if not tool_list:
+        return ""
+    lines = []
+    for tool_item in tool_list:
+        line = f"- {_tool_signature(tool_item)}"
+        if tool_item.description:
+            line += f": {tool_item.description}"
+        lines.append(line)
+    return f"<available_tools>\n{'\n'.join(lines)}\n</available_tools>"
 
 
 @dataclass(frozen=True)
@@ -474,7 +554,6 @@ def tool(
     model: type[BaseModel] | None = ...,
     description: str | None = ...,
     context: bool = ...,
-    agent_use: bool = ...,
 ) -> Tool: ...
 
 
@@ -486,7 +565,6 @@ def tool(
     model: type[BaseModel] | None = ...,
     description: str | None = ...,
     context: bool = ...,
-    agent_use: bool = ...,
 ) -> Callable[[Callable], Tool]: ...
 
 
@@ -497,7 +575,6 @@ def tool(
     model: type[BaseModel] | None = None,
     description: str | None = None,
     context: bool = False,
-    agent_use: bool = True,
 ) -> Tool | Callable[[Callable], Tool]:
     """Decorator to convert a function into a Tool instance."""
 
@@ -519,7 +596,6 @@ def tool(
                 parameters=model.model_json_schema(),
                 handler=handler,
                 context=context,
-                agent_use=agent_use,
             )
         else:
             result = Tool.from_callable(
@@ -527,7 +603,6 @@ def tool(
                 name=name,
                 description=description,
                 context=context,
-                agent_use=agent_use,
             )
         tool_instance = _add_logging(result)
         REGISTRY[tool_instance.name] = tool_instance

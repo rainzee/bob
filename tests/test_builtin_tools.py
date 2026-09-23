@@ -18,17 +18,12 @@ from bub.builtin.tools import (
     bash,
     bash_output,
     kill_bash,
-    quit_tool,
-    render_tools_prompt,
-    resolve_tool_names,
-    set_model,
-    set_reasoning_effort,
     tape_info,
 )
 from bub.errors import ErrorKind
 from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
 from bub.tape import Tape, TapeContext
-from bub.tools import REGISTRY, Tool, ToolContext, ToolExecutor, tool
+from bub.tools import REGISTRY, Tool, ToolContext, ToolExecutor, render_tools_prompt, resolve_tool_names, tool
 
 
 def _tool_context(tmp_path, **state) -> ToolContext:
@@ -101,10 +96,10 @@ def test_render_tools_prompt_returns_empty_string_for_empty_input() -> None:
     assert render_tools_prompt([]) == ""
 
 
-def test_render_tools_prompt_excludes_tools_disabled_for_agent_use() -> None:
-    internal_tool = Tool(name="tests.internal", handler=lambda: None, agent_use=False)
+def test_render_tools_prompt_includes_plain_tools() -> None:
+    internal_tool = Tool(name="tests.internal", handler=lambda: None)
 
-    assert render_tools_prompt([internal_tool]) == ""
+    assert render_tools_prompt([internal_tool]) != ""
 
 
 def test_resolve_tool_names_accepts_runtime_names_and_model_aliases() -> None:
@@ -144,77 +139,6 @@ def test_resolve_tool_names_rejects_unknown_names() -> None:
 
     with pytest.raises(ValueError, match="tests_missing_tool"):
         resolve_tool_names(None, exclude={" tests_missing_tool "})
-
-
-def test_set_model_is_registered_with_context() -> None:
-    assert "model" in REGISTRY
-    tool_obj = REGISTRY["model"]
-    assert tool_obj.context is True
-    assert tool_obj.parameters == {
-        "type": "object",
-        "properties": {"model_id": {"type": "string"}},
-        "required": ["model_id"],
-    }
-
-
-@pytest.mark.asyncio
-async def test_set_model_writes_model_into_state_and_records_on_tape(tmp_path) -> None:
-    context = _tool_context(tmp_path)
-    assert "model" not in context.state
-
-    result = await set_model.run(model_id="openai:gpt-4o", context=context)
-
-    assert context.state["model"] == "openai:gpt-4o"
-    assert "openai:gpt-4o" in result
-    assert "next turn" in result.lower()
-    # The switch is also persisted as a `model_switch` event on the session
-    # tape, which load_state recovers on the next turn / after restart.
-    entries = list(await context.tape.store.fetch_all(context.tape.query().kinds("event")))
-    switches = [entry for entry in entries if entry.kind == "event" and entry.payload.get("name") == "model_switch"]
-    assert len(switches) == 1
-    assert switches[0].payload.get("data") == {"model": "openai:gpt-4o"}
-
-
-@pytest.mark.asyncio
-async def test_set_model_overwrites_previous_model(tmp_path) -> None:
-    context = _tool_context(tmp_path, model="openai:gpt-4o")
-
-    await set_model.run(model_id="anthropic:claude-3", context=context)
-
-    assert context.state["model"] == "anthropic:claude-3"
-
-
-def test_set_reasoning_effort_is_registered_for_internal_use() -> None:
-    assert REGISTRY["reasoning_effort"] is set_reasoning_effort
-    assert set_reasoning_effort.context is True
-    assert set_reasoning_effort.agent_use is False
-    assert set_reasoning_effort.parameters == {
-        "type": "object",
-        "properties": {"reasoning_effort": {"type": "string"}},
-        "required": ["reasoning_effort"],
-    }
-
-
-@pytest.mark.asyncio
-async def test_set_reasoning_effort_writes_state_and_records_on_tape(tmp_path) -> None:
-    context = _tool_context(tmp_path)
-
-    result = await set_reasoning_effort.run(reasoning_effort=" high ", context=context)
-
-    assert context.state["reasoning_effort"] == "high"
-    assert result == "Session reasoning effort set to high (applies from the next turn)."
-    entries = list(await context.tape.store.fetch_all(context.tape.query().kinds("event")))
-    switches = [
-        entry for entry in entries if entry.kind == "event" and entry.payload.get("name") == "reasoning_effort_switch"
-    ]
-    assert len(switches) == 1
-    assert switches[0].payload.get("data") == {"reasoning_effort": "high"}
-
-
-@pytest.mark.asyncio
-async def test_set_reasoning_effort_rejects_empty_value(tmp_path) -> None:
-    with pytest.raises(ValueError, match="must not be empty"):
-        await set_reasoning_effort.run(reasoning_effort="  ", context=_tool_context(tmp_path))
 
 
 def test_bash_schema_exposes_command_parameter() -> None:
@@ -438,38 +362,6 @@ async def test_kill_bash_returns_status_when_process_already_finished(tmp_path) 
     result = await kill_bash.run(shell_id=shell_id)
 
     assert result == f"id: {shell_id}\nstatus: exited\nexit_code: 0"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("background", [True, False])
-async def test_quit_tool_terminates_background_shells_for_current_session(tmp_path, monkeypatch, background) -> None:
-    manager = ShellManager()
-    monkeypatch.setattr(builtin_tools, "shell_manager", manager)
-
-    target_started = await bash.run(
-        command=_python_shell("import time; time.sleep(10)"),
-        background=background,
-        timeout_seconds=0,
-        context=_tool_context(tmp_path, session_id="session:target"),
-    )
-    target_shell_id = _shell_id(target_started)
-    other_started = await bash.run(
-        command=_python_shell("import time; time.sleep(10)"),
-        background=True,
-        context=_tool_context(tmp_path, session_id="session:other"),
-    )
-    other_shell_id = _shell_id(other_started)
-
-    context = _tool_context(tmp_path, session_id="session:target")
-
-    result = await quit_tool.run(context=context)
-
-    assert result == "Session tasks stopped."
-    with pytest.raises(KeyError, match="unknown shell id"):
-        await bash_output.run(shell_id=target_shell_id)
-    assert manager.get(other_shell_id).returncode is None
-
-    await kill_bash.run(shell_id=other_shell_id)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")

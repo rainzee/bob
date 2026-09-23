@@ -52,13 +52,13 @@ def test_model_tools_rewrites_dotted_names_without_mutating_original() -> None:
     assert "additionalProperties" not in rename_me.parameters
 
 
-def test_model_tools_excludes_tools_disabled_for_agent_use() -> None:
-    visible_tool = Tool(name="tests.visible", handler=lambda: None)
-    internal_tool = Tool(name="tests.internal", handler=lambda: None, agent_use=False)
+def test_model_tools_maps_dotted_names_to_model_aliases() -> None:
+    dotted = Tool(name="tests.dotted", handler=lambda: None)
+    plain = Tool(name="tests_plain", handler=lambda: None)
 
-    rewritten = model_tools([visible_tool, internal_tool])
+    rewritten = model_tools([dotted, plain])
 
-    assert [item.name for item in rewritten] == ["tests_visible"]
+    assert [item.name for item in rewritten] == ["tests_dotted", "tests_plain"]
 
 
 @pytest.mark.asyncio
@@ -72,23 +72,8 @@ async def test_tool_decorator_registers_tool_and_preserves_metadata() -> None:
 
     assert sync_tool.name == tool_name
     assert sync_tool.description == "Sync test tool"
-    assert sync_tool.agent_use is True
     assert REGISTRY[tool_name] is sync_tool
     assert await sync_tool.run(value="hello") == "HELLO"
-
-
-@pytest.mark.asyncio
-async def test_tool_decorator_can_disable_agent_use_without_disabling_direct_calls() -> None:
-    tool_name = "tests.internal_tool"
-    REGISTRY.pop(tool_name, None)
-
-    @tool(name=tool_name, agent_use=False)
-    def internal_tool(value: str) -> str:
-        return value.upper()
-
-    assert internal_tool.agent_use is False
-    assert REGISTRY[tool_name] is internal_tool
-    assert await internal_tool.run("hello") == "HELLO"
 
 
 @pytest.mark.asyncio

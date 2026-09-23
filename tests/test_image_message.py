@@ -48,7 +48,6 @@ def test_message_defaults_keep_text_only_messages_media_free() -> None:
     message = Message(session_id="s", channel="tg", content="hello")
 
     assert message.media == []
-    assert message.kind == "normal"
     assert message.context_str == ""
 
 
@@ -210,7 +209,7 @@ async def test_build_prompt_skips_remote_audio_url(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_prompt_command_ignores_media(tmp_path: Path) -> None:
+async def test_build_prompt_keeps_media_for_text_starting_with_comma(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
     message = Message(
         session_id="s",
@@ -221,9 +220,9 @@ async def test_build_prompt_command_ignores_media(tmp_path: Path) -> None:
 
     result = await impl.build_prompt(message, session_id="s", state={})
 
-    assert isinstance(result, str)
-    assert result == ",help"
-    assert message.kind == "command"
+    assert isinstance(result, list)
+    assert result[0]["type"] == "text"
+    assert result[0]["text"].endswith(",help")
 
 
 # ---------------------------------------------------------------------------

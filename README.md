@@ -33,8 +33,10 @@ from bub.store import FileTapeStore
 
 async def main() -> None:
     framework = BubFramework()
-    framework.load_builtin_hooks()
-    agent = Agent(framework, tape_store=FileTapeStore("sessions"))
+    # batteries=True adds the builtin tool set (bash, fs.*, tape.*, web.fetch,
+    # subagent), the file tape store, tool-output spill, and shell lifecycle.
+    framework.load_builtin_hooks(batteries=True)
+    agent = Agent(framework)
     async with framework.running():
         stream = await agent.run_stream(session_id="demo", prompt="Hello")
         async for event in stream:
@@ -45,6 +47,10 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+Without `batteries=True` the default hooks own only the turn pipeline, `Agent()`
+starts with no tools, and no tape store is provided; supply your own with
+`Agent(framework, tools=[...], tape_store=FileTapeStore("sessions"))`.
+
 From a checkout, `uv sync` is enough; for local development use `make install` so `prek` hooks are installed too.
 
 ## Why Bub
@@ -52,7 +58,7 @@ From a checkout, `uv sync` is enough; for local development use `make install` s
 - **Composable by design.** Every turn stage is a plugin hook. Override one stage or replace the whole flow without forking the runtime.
 - **Tape context.** Context is rebuilt from append-only records, not carried around as mutable session state. Easier to inspect, replay, and hand off.
 - **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel, REPL, or transport is baked in.
-- **Batteries included.** Tools, skills, tape stores, and model execution ship with the runtime. Use the defaults first, replace them later.
+- **Batteries optional.** Tools, skills, tape stores, and model execution ship with the runtime, but the batteries are opt-in: the default hooks own only the turn pipeline.
 - **Operator equivalence.** Humans and agents work inside the same runtime boundaries, with the same evidence trail and handoff model. No hidden operator class.
 
 ## How It Works
@@ -98,10 +104,6 @@ echo = "my_package.plugin:echo_plugin"
 ```
 
 See the [Build docs](https://bub.build/docs/build/) for hook guides, packaging, and plugin structure.
-
-## Internal commands
-
-Prompts starting with `,` run an internal command instead of a model turn (`,help`, `,skill name=my-skill`, `,fs.read path=README.md`).
 
 ## Configuration
 

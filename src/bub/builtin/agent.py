@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import inspect
 import re
-import shlex
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Collection, Iterable
 from contextlib import AsyncExitStack, aclosing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
@@ -26,7 +24,7 @@ from bub.skills import discover_skills, render_skills_prompt
 from bub.store import AsyncTapeStore, AsyncTapeStoreAdapter, InMemoryTapeStore, TapeStore, is_async_tape_store
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape
-from bub.tools import REGISTRY, Tool, ToolContext, model_tools
+from bub.tools import REGISTRY, Tool, model_tools
 from bub.tracing import Span, current_span
 from bub.turn import TurnState
 from bub.utils import workspace_from_state
@@ -171,20 +169,13 @@ class Agent:
                         tape.fork_tape(merge_back=not session_id.startswith("temp/"))
                     )
                     await tape.ensure_bootstrap_anchor()
-                    if isinstance(prompt, str) and prompt.strip().startswith(","):
-                        result = await self._run_command(tape=tape, line=prompt.strip())
-                        events = self._events_from_iterable([
-                            StreamEvent("text", {"delta": result}),
-                            StreamEvent("final", {"text": result, "ok": True}),
-                        ])
-                    else:
-                        events = await self._agent_loop(
-                            tape=tape,
-                            prompt=prompt,
-                            model=model,
-                            allowed_skills=allowed_skills,
-                            allowed_tools=allowed_tools,
-                        )
+                    events = await self._agent_loop(
+                        tape=tape,
+                        prompt=prompt,
+                        model=model,
+                        allowed_skills=allowed_skills,
+                        allowed_tools=allowed_tools,
+                    )
         except BaseException as exc:
             span.fail(exc)
             try:
@@ -225,48 +216,6 @@ class Agent:
             if text:
                 messages.append({"role": "assistant", "content": "".join(text)})
             span.messages("gen_ai.output.messages", messages)
-
-    async def _run_command(self, tape: Tape, *, line: str) -> str:
-        line = line[1:].strip()
-        if not line:
-            raise ValueError("empty command")
-
-        name, arg_tokens = _parse_internal_command(line)
-        start = time.monotonic()
-        context = ToolContext(tape=tape, run_id="run_command", state=tape.context.state)
-        output = ""
-        status = "ok"
-        try:
-            if name not in self.tools:
-                if "bash" not in self.tools:
-                    raise ValueError("bash tool is not available")  # noqa: TRY301
-                output = await self.tools["bash"].run(context=context, command=line)
-            else:
-                args = _parse_args(arg_tokens)
-                if self.tools[name].context:
-                    args.kwargs["context"] = context
-                output = self.tools[name].run(*args.positional, **args.kwargs)
-                if inspect.isawaitable(output):
-                    output = await output
-        except Exception as exc:
-            status = "error"
-            output = f"{exc!s}"
-            raise
-        else:
-            return output if isinstance(output, str) else str(output)
-        finally:
-            elapsed_ms = int((time.monotonic() - start) * 1000)
-            output_text = output if isinstance(output, str) else str(output)
-
-            event_payload = {
-                "raw": line,
-                "name": name,
-                "status": status,
-                "elapsed_ms": elapsed_ms,
-                "output": output_text,
-                "date": datetime.now(UTC).isoformat(),
-            }
-            await tape.append_event("command", event_payload)
 
     async def _agent_loop(
         self,
@@ -428,7 +377,7 @@ class Agent:
     ) -> AsyncStreamEvents:
         prompt_text = prompt if isinstance(prompt, str) else _extract_text_from_parts(prompt)
         if allowed_tools is not None:
-            from bub.builtin.tools import resolve_tool_names
+            from bub.tools import resolve_tool_names
 
             allowed_tools = resolve_tool_names(allowed_tools, all_names=self.tools)
         if allowed_skills is not None:
@@ -484,7 +433,7 @@ class Agent:
         allowed_skills: set[str] | None = None,
         tools: Iterable[Tool] | None = None,
     ) -> str:
-        from bub.builtin.tools import render_tools_prompt
+        from bub.tools import render_tools_prompt
 
         blocks: list[str] = []
         if result := self.framework.get_system_prompt(prompt=prompt, state=state):
@@ -496,36 +445,6 @@ class Agent:
         if skills_prompt := self._load_skills_prompt(prompt, workspace, allowed_skills):
             blocks.append(skills_prompt)
         return "\n\n".join(blocks)
-
-
-@dataclass(frozen=True)
-class Args:
-    positional: list[str]
-    kwargs: dict[str, Any]
-
-
-def _parse_internal_command(line: str) -> tuple[str, list[str]]:
-    body = line.strip()
-    words = shlex.split(body)
-    if not words:
-        return "", []
-    return words[0], words[1:]
-
-
-def _parse_args(args_tokens: list[str]) -> Args:
-    positional: list[str] = []
-    kwargs: dict[str, str] = {}
-    first_kwarg = False
-    for token in args_tokens:
-        if "=" in token:
-            key, value = token.split("=", 1)
-            kwargs[key] = value
-            first_kwarg = True
-        elif first_kwarg:
-            raise ValueError(f"positional argument '{token}' cannot appear after keyword arguments")
-        else:
-            positional.append(token)
-    return Args(positional=positional, kwargs=kwargs)
 
 
 def _extract_text_from_parts(parts: list[dict]) -> str:

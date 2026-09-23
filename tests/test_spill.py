@@ -8,7 +8,7 @@ import pluggy
 import pytest
 
 from bub.builtin.context import default_tape_context
-from bub.builtin.hook_impl import BuiltinImpl
+from bub.builtin.hook_impl import BatteryImpl
 from bub.builtin.spill import (
     SPILL_READ_MODEL_NAME,
     SPILL_READ_TOOL_NAME,
@@ -17,13 +17,12 @@ from bub.builtin.spill import (
     SpillStore,
     spill_read,
 )
-from bub.builtin.tools import render_tools_prompt
 from bub.hooks import BUB_HOOK_NAMESPACE, BubHookSpecs, hookimpl
 from bub.hooks.interception import AgentHooks, ToolCall, ToolCallDecision, ToolCallResult
 from bub.hooks.runtime import HookRuntime
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore, TapeStore
 from bub.tape import Tape
-from bub.tools import Tool, ToolContext, ToolExecutor, model_tools
+from bub.tools import Tool, ToolContext, ToolExecutor, model_tools, render_tools_prompt
 
 
 class _SpillHooks:
@@ -31,7 +30,7 @@ class _SpillHooks:
         return call, ToolCallDecision.proceed()
 
     async def after_tool_call(self, call: ToolCall, result: ToolCallResult, state: dict[str, Any]) -> None:
-        await BuiltinImpl.after_tool_call(self, call, result, state)  # type: ignore[arg-type]
+        await BatteryImpl.after_tool_call(self, call, result, state)  # type: ignore[arg-type]
 
 
 def _spill_executor() -> ToolExecutor:
@@ -185,7 +184,7 @@ async def test_spill_runs_after_other_result_hooks(tmp_path: Path) -> None:
 
     plugin_manager = pluggy.PluginManager(BUB_HOOK_NAMESPACE)
     plugin_manager.add_hookspecs(BubHookSpecs)
-    plugin_manager.register(BuiltinImpl(None), name="builtin")  # type: ignore[arg-type]
+    plugin_manager.register(BatteryImpl(None), name="batteries")  # type: ignore[arg-type]
     plugin_manager.register(ExpandResult(), name="expand-result")
     executor = ToolExecutor(hooks=AgentHooks(HookRuntime(plugin_manager)))
     root = _root_tape(tmp_path, InMemoryTapeStore(), threshold=100)
@@ -221,7 +220,7 @@ async def test_failure_replacement_is_used_for_spill_check(
 
     plugin_manager = pluggy.PluginManager(BUB_HOOK_NAMESPACE)
     plugin_manager.add_hookspecs(BubHookSpecs)
-    plugin_manager.register(BuiltinImpl(None), name="builtin")  # type: ignore[arg-type]
+    plugin_manager.register(BatteryImpl(None), name="batteries")  # type: ignore[arg-type]
     plugin_manager.register(ReplaceFailure(), name="replace-failure")
     executor = ToolExecutor(hooks=AgentHooks(HookRuntime(plugin_manager)))
     root = _root_tape(tmp_path, InMemoryTapeStore(), threshold=100)

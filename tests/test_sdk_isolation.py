@@ -4,12 +4,12 @@ from unittest.mock import Mock
 import pytest
 
 from bub.builtin import Agent
-from bub.builtin.tools import resolve_tool_names, run_subagent
+from bub.builtin.tools import run_subagent
 from bub.framework import BubFramework
 from bub.store import InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent
 from bub.tape import Tape
-from bub.tools import Tool, ToolContext
+from bub.tools import Tool, ToolContext, resolve_tool_names
 
 
 def _reply() -> AsyncStreamEvents:

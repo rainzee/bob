@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import uuid
-from collections.abc import Iterable
 from contextlib import aclosing
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -13,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from bub.builtin.shell_manager import shell_manager
 from bub.skills import discover_skills
-from bub.tools import REGISTRY, Tool, ToolContext, tool
+from bub.tools import ToolContext, resolve_tool_names, tool
 
 if TYPE_CHECKING:
     from bub.builtin.agent import Agent
@@ -21,85 +20,6 @@ if TYPE_CHECKING:
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_HEADERS = {"accept": "text/markdown"}
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
-
-
-def _to_model_name(name: str) -> str:
-    return name.replace(".", "_")
-
-
-def _tool_name_index(all_names: Iterable[str]) -> dict[str, str]:
-    names = tuple(all_names)
-    real_names = {tool_name.casefold(): tool_name for tool_name in names}
-    alias_names = {_to_model_name(tool_name).casefold(): tool_name for tool_name in names}
-    return {**alias_names, **real_names}
-
-
-def resolve_tool_name(name: str) -> str | None:
-    """Resolve a user/model-provided tool name to the runtime registry name."""
-    key = name.strip().casefold()
-    if not key:
-        return None
-    return _tool_name_index(REGISTRY).get(key)
-
-
-def _resolve_explicit_tool_names(names: Iterable[str], index: dict[str, str]) -> tuple[set[str], set[str]]:
-    resolved: set[str] = set()
-    unknown: set[str] = set()
-    for name in names:
-        normalized_name = name.strip()
-        if resolved_name := index.get(normalized_name.casefold()):
-            resolved.add(resolved_name)
-        else:
-            unknown.add(normalized_name)
-    return resolved, unknown
-
-
-def _raise_unknown_tool_names(names: set[str]) -> None:
-    formatted = ", ".join(sorted(repr(name) for name in names))
-    raise ValueError(f"unknown tool name(s): {formatted}")
-
-
-def resolve_tool_names(
-    names: Iterable[str] | None = None, *, exclude: Iterable[str] = (), all_names: Iterable[str] | None = None
-) -> set[str]:
-    """Resolve tool names from either runtime names or model-facing aliases."""
-    available = tuple(REGISTRY if all_names is None else all_names)
-    index = _tool_name_index(available)
-    excluded, unknown_excluded = _resolve_explicit_tool_names(exclude, index)
-    if unknown_excluded:
-        _raise_unknown_tool_names(unknown_excluded)
-    if names is None:
-        return set(available) - excluded
-
-    resolved, unknown = _resolve_explicit_tool_names(names, index)
-    if unknown:
-        _raise_unknown_tool_names(unknown)
-    return resolved - excluded
-
-
-def _tool_signature(tool_item: Tool) -> str:
-    properties = tool_item.parameters.get("properties", {})
-    if not isinstance(properties, dict) or not properties:
-        return f"{_to_model_name(tool_item.name)}()"
-
-    required = tool_item.parameters.get("required", [])
-    required_names = set(required) if isinstance(required, list) else set()
-    params = [name if name in required_names else f"{name}?" for name in properties]
-    return f"{_to_model_name(tool_item.name)}({', '.join(params)})"
-
-
-def render_tools_prompt(tools: Iterable[Tool]) -> str:
-    """Render a human-readable description of tools for builtin agent prompts."""
-    agent_tools = [tool_item for tool_item in tools if tool_item.agent_use]
-    if not agent_tools:
-        return ""
-    lines = []
-    for tool_item in agent_tools:
-        line = f"- {_tool_signature(tool_item)}"
-        if tool_item.description:
-            line += f": {tool_item.description}"
-        lines.append(line)
-    return f"<available_tools>\n{'\n'.join(lines)}\n</available_tools>"
 
 
 def _raise_for_failed_shell(returncode: int | None, output: str) -> None:
@@ -366,64 +286,6 @@ async def run_subagent(param: SubAgentInput, *, context: ToolContext) -> str:
             elif event.kind == "text":
                 output += str(event.data.get("delta", ""))
     return output
-
-
-@tool(name="help", agent_use=False)
-def show_help() -> str:
-    """Show a help message."""
-    return (
-        "Commands use ',' at line start.\n"
-        "Known internal commands:\n"
-        "  ,help\n"
-        "  ,skill name=foo\n"
-        "  ,tape.info\n"
-        "  ,tape.search query=error\n"
-        "  ,tape.handoff name=phase-1 summary='done'\n"
-        "  ,tape.anchors\n"
-        "  ,fs.read path=README.md\n"
-        "  ,fs.write path=tmp.txt content='hello'\n"
-        "  ,fs.edit path=tmp.txt old=hello new=world\n"
-        "  ,bash command='sleep 5' background=true\n"
-        "  ,bash.output shell_id=bsh-12345678\n"
-        "  ,bash.kill shell_id=bsh-12345678\n"
-        "  ,quit\n"
-        "Any unknown command after ',' is executed as shell via bash."
-    )
-
-
-@tool(name="quit", context=True, agent_use=False)
-async def quit_tool(*, context: ToolContext) -> str:
-    """Abort the tasks of the current session. DO NOT use it in a normal workflow."""
-    session_id = str(context.state.get("session_id", "temp/unknown"))
-    await shell_manager.terminate_session(session_id)
-    return "Session tasks stopped."
-
-
-@tool(name="model", context=True, agent_use=False)
-async def set_model(model_id: str, *, context: ToolContext) -> str:
-    """Switch the model for THIS session. Invoke as the `,model <model_id>` command.
-
-    Takes effect on the NEXT turn and persists across restarts. Pass any
-    ``provider:model`` string (for example ``openai:gpt-4o`` or
-    ``openrouter:openrouter/free``). An invalid model surfaces as an error on the
-    next turn — run `,model <valid_id>` again to recover.
-    """
-    context.state["model"] = model_id
-    # Persist on the session tape (merged back at end of turn); load_state
-    # recovers the latest `model_switch` event next turn / after restart.
-    await context.tape.append_event("model_switch", {"model": model_id})
-    return f"Session model set to {model_id} (applies from the next turn)."
-
-
-@tool(name="reasoning_effort", context=True, agent_use=False)
-async def set_reasoning_effort(reasoning_effort: str, *, context: ToolContext) -> str:
-    """Set the reasoning effort for this session starting from the next turn."""
-    reasoning_effort = reasoning_effort.strip()
-    if not reasoning_effort:
-        raise ValueError("reasoning_effort must not be empty")
-    context.state["reasoning_effort"] = reasoning_effort
-    await context.tape.append_event("reasoning_effort_switch", {"reasoning_effort": reasoning_effort})
-    return f"Session reasoning effort set to {reasoning_effort} (applies from the next turn)."
 
 
 def _resolve_path(context: ToolContext, raw_path: str) -> Path:

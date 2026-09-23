@@ -7,7 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from bub.builtin.hook_impl import AGENTS_FILE_NAME, DEFAULT_CONTINUE_PROMPT, DEFAULT_SYSTEM_PROMPT, BuiltinImpl
+from bub.builtin.hook_impl import (
+    AGENTS_FILE_NAME,
+    DEFAULT_CONTINUE_PROMPT,
+    DEFAULT_SYSTEM_PROMPT,
+    BatteryImpl,
+    BuiltinImpl,
+)
 from bub.framework import BubFramework
 from bub.message import Message
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
@@ -160,18 +166,14 @@ async def test_recover_session_model_returns_latest_recorded(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_build_prompt_marks_commands_and_prefixes_context(tmp_path: Path) -> None:
+async def test_build_prompt_prefixes_context(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
-    command = Message(session_id="s", channel="cli", chat_id="room", content=",help")
     normal = Message(session_id="s", channel="cli", chat_id="room", content="hello", context={"tenant": "acme"})
     plain = Message(session_id="s", channel="cli", chat_id="room", content="hello")
 
-    command_prompt = await impl.build_prompt(command, session_id="s", state={})
     normal_prompt = await impl.build_prompt(normal, session_id="s", state={})
     plain_prompt = await impl.build_prompt(plain, session_id="s", state={})
 
-    assert command_prompt == ",help"
-    assert command.kind == "command"
     prompt_lines = normal_prompt.splitlines()
     assert prompt_lines[0] == normal.context_str
     assert prompt_lines[2] == "hello"
@@ -276,11 +278,11 @@ def test_system_prompt_ignores_missing_agents_file(tmp_path: Path) -> None:
     assert result == DEFAULT_SYSTEM_PROMPT + "\n\n"
 
 
-def test_provide_tape_store_uses_bub_home_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _, impl, _ = _build_impl(tmp_path)
+def test_battery_impl_provides_file_tape_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    framework, _, _ = _build_impl(tmp_path)
     monkeypatch.setenv("BUB_HOME", str(tmp_path))
 
-    store = impl.provide_tape_store()
+    store = BatteryImpl(framework).provide_tape_store()
 
     assert isinstance(store, FileTapeStore)
     assert store._directory == tmp_path / "tapes"

@@ -5,7 +5,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-type MessageKind = Literal["error", "normal", "command"]
 type MediaType = Literal["image", "audio", "video", "document"]
 
 _AUDIO_FORMAT_TO_MIME_TYPE = {
@@ -66,7 +65,6 @@ class Message:
     content: str
     channel: str = "default"
     chat_id: str = "default"
-    kind: MessageKind = "normal"
     context: dict[str, Any] = field(default_factory=dict)
     media: list[MediaItem] = field(default_factory=list)
 
