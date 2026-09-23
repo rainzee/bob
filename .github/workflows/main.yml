@@ -39,28 +39,3 @@ jobs:
 
       - name: Check typing
         run: uv run mypy
-
-
-
-  check-docs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@v6
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: website/.node-version
-          cache: pnpm
-          cache-dependency-path: website/pnpm-lock.yaml
-
-      - name: Check if documentation can be built
-        run: |
-          pnpm --dir website install --frozen-lockfile
-          pnpm --dir website build

@@ -168,9 +168,15 @@ def _is_valid_metadata_field(metadata_field: object) -> bool:
 
 
 def _builtin_skills_root() -> list[Path]:
+    """列出已安装的内置技能根目录, 未安装时返回空列表"""
+
     import importlib
 
-    return [Path(p) for p in importlib.import_module("skills").__path__]
+    try:
+        module = importlib.import_module("skills")
+    except ModuleNotFoundError:
+        return []
+    return [Path(p) for p in module.__path__]
 
 
 def iter_skill_roots(workspace_path: Path) -> list[tuple[Path, str]]:

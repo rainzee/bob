@@ -81,11 +81,11 @@ fallback-version = "0.3.0"
 version-file = "src/bub/_version.py"
 
 [tool.hatch.build.targets.sdist]
-only-include = ["src/bub", "src/skills", "tests"]
+only-include = ["src/bub", "tests"]
 
 [tool.hatch.build.targets.wheel]
 sources = ["src"]
-only-include = ["src/bub", "src/skills"]
+only-include = ["src/bub"]
 
 [tool.vulture]
 ignore_names = ["test_*", "Test*"]
@@ -101,9 +101,6 @@ warn_return_any = true
 warn_unused_ignores = true
 show_error_codes = true
 ignore_missing_imports = true
-exclude = [
-    "src/skills/.*/scripts/.*",
-]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -112,9 +109,6 @@ testpaths = ["tests"]
 target-version = "py312"
 line-length = 120
 fix = true
-extend-exclude = [
-    "src/skills/**/scripts/*"
-]
 
 [tool.ruff.lint]
 select = [

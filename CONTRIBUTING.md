@@ -62,15 +62,14 @@ git clone git@github.com:YOUR_NAME/bub.git
 cd bub
 ```
 
-Then, install the Python and website environments with:
+Then, install the Python environment with:
 
 ```bash
 make install
 ```
 
-4. If you only need the Python environment, `uv sync` is still enough. The
-   full `make install` path also installs the new website dependencies and
-   sets up `prek`.
+4. If you prefer the minimal path, `uv sync` is enough. The full `make install`
+   path additionally sets up `prek`.
 
 5. Create a branch for local development:
 
@@ -94,19 +93,7 @@ Now, validate that all unit tests are passing:
 make test
 ```
 
-9. If your change touches the website/docs experience, also build the Astro site:
-
-```bash
-make docs-test
-```
-
-If you need to inspect the production-style site locally, run:
-
-```bash
-make docs-preview
-```
-
-10. Before raising a pull request you should also run tox.
+9. Before raising a pull request you should also run tox.
    This will run the tests across different versions of Python:
 
 ```bash
@@ -116,7 +103,7 @@ tox
 This requires you to have multiple versions of python installed.
 This step is also triggered in the CI/CD pipeline, so you could also choose to skip this step locally.
 
-11. Commit your changes and push your branch to GitHub:
+10. Commit your changes and push your branch to GitHub:
 
 ```bash
 git add .
@@ -124,7 +111,7 @@ git commit -m "Your detailed description of your changes."
 git push origin name-of-your-bugfix-or-feature
 ```
 
-12. Submit a pull request through the GitHub website.
+11. Submit a pull request through the GitHub website.
 
 # Pull Request Guidelines
 

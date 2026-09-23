@@ -12,14 +12,13 @@ Core code lives under `src/`:
 - `src/bub/builtin/`: builtin runtime, CLI wiring, settings, tools, and tape services.
 - `src/bub/channels/`: channel abstractions plus CLI and Telegram adapters.
 - `src/bub/skills.py` / `src/bub/tools.py`: skill discovery and tool registry.
-- `src/skills/`: bundled skills shipped with Bub.
 
-Tests live in `tests/`. The website and docs runtime lives in `website/`.
+Tests live in `tests/`.
 
 ## Build, Test, and Development Commands
 
 - `uv sync`: install or update the Python environment; enough to run Bub from source or for deployment-only hosts.
-- `make install`: full local development bootstrap; sync Python deps, install website deps, and install `prek` hooks.
+- `make install`: full local development bootstrap; sync Python deps and install `prek` hooks.
 - `uv run bub chat`: run the interactive CLI.
 - `uv run bub gateway`: start channel listener mode.
 - `uv run bub run "hello"`: run one inbound message through the full framework pipeline.
@@ -29,7 +28,6 @@ Tests live in `tests/`. The website and docs runtime lives in `website/`.
 - `uv run pytest -q`: run the main test suite without doctests.
 - `make test`: run pytest with doctests enabled.
 - `make check`: lock validation, `prek`, and typing.
-- `make docs` / `make docs-test` / `make docs-preview`: serve, build, or preview the Astro website/docs in `website/`.
 
 ## Coding Style & Naming Conventions
 

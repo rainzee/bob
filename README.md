@@ -19,42 +19,21 @@ Built on [agents.md](https://agents.md/) and [Agent Skills](https://agentskills.
 
 ## Quick Start
 
-macOS and Linux:
+Install from source:
 
 ```bash
-curl -fsSL https://bub.build/install.sh | bash
+git clone https://github.com/rainzee/bob.git
+cd bob
+uv sync
 ```
 
-Windows PowerShell:
+For local development, use `make install` instead so `prek` hooks are installed too.
 
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://bub.build/install.ps1 | iex"
-```
-
-The interactive installer uses a colored preset picker, accepts additional plugin dependencies, and runs `bub onboard` after installation. For automation, select a preset explicitly; non-interactive installs skip onboarding:
+The CLI entry point is a development aid; the supported surface is the Python API.
 
 ```bash
-curl -fsSL https://bub.build/install.sh | bash -s -- --preset recommended --dependency extra-plugin
-```
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "& ([scriptblock]::Create((irm https://bub.build/install.ps1))) --preset recommended --dependency extra-plugin"
-```
-
-Or from source:
-
-```bash
-git clone https://github.com/bubbuild/bub.git
-cd bub
-uv sync  # enough to run Bub from source
-```
-
-For local development, use `make install` instead so the website toolchain and `prek` hooks are installed too.
-
-```bash
-bub chat                         # interactive session
-bub run "summarize this repo"    # one-shot task
-bub gateway                      # channel listener mode
+bub run "summarize this repo"    # one-shot task through the full pipeline
+bub chat                         # interactive REPL
 ```
 
 ## Why Bub
@@ -165,8 +144,6 @@ Read more:
 make install
 make check
 make test
-make docs
-make docs-test
 ```
 
 See [CONTRIBUTING.md](https://github.com/bubbuild/bub/blob/main/CONTRIBUTING.md).
