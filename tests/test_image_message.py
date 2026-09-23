@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from bub.builtin.hook_impl import BuiltinImpl
-from bub.channels.message import ChannelMessage, MediaItem
 from bub.framework import BubFramework
+from bub.message import MediaItem, Message
 
 
 def _async_return(value):
@@ -21,7 +21,7 @@ def _async_return(value):
 
 
 # ---------------------------------------------------------------------------
-# MediaItem & ChannelMessage
+# MediaItem & Message
 # ---------------------------------------------------------------------------
 
 
@@ -44,33 +44,12 @@ async def test_media_item_returns_none_when_fetcher_skips_download() -> None:
     assert await item.get_url() is None
 
 
-def test_channel_message_from_batch_merges_media() -> None:
-    m1 = ChannelMessage(
-        session_id="s",
-        channel="tg",
-        content="a",
-        media=[MediaItem(type="image", mime_type="image/jpeg", data_fetcher=_async_return(b"AAA"))],
-    )
-    m2 = ChannelMessage(
-        session_id="s",
-        channel="tg",
-        content="b",
-        media=[MediaItem(type="image", mime_type="image/jpeg", data_fetcher=_async_return(b"BBB"))],
-    )
-    merged = ChannelMessage.from_batch([m1, m2])
+def test_message_defaults_keep_text_only_messages_media_free() -> None:
+    message = Message(session_id="s", channel="tg", content="hello")
 
-    assert merged.content == "a\nb"
-    assert len(merged.media) == 2
-    assert merged.media[0] is m1.media[0]
-    assert merged.media[1] is m2.media[0]
-
-
-def test_channel_message_from_batch_no_media() -> None:
-    m1 = ChannelMessage(session_id="s", channel="tg", content="a")
-    m2 = ChannelMessage(session_id="s", channel="tg", content="b")
-    merged = ChannelMessage.from_batch([m1, m2])
-
-    assert merged.media == []
+    assert message.media == []
+    assert message.kind == "normal"
+    assert message.context_str == ""
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +72,7 @@ def _build_impl(tmp_path: Path) -> tuple[BubFramework, BuiltinImpl]:
 @pytest.mark.asyncio
 async def test_build_prompt_returns_string_without_media(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(session_id="s", channel="tg", content="hello")
+    message = Message(session_id="s", channel="tg", content="hello")
 
     result = await impl.build_prompt(message, session_id="s", state={})
 
@@ -104,7 +83,7 @@ async def test_build_prompt_returns_string_without_media(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_build_prompt_returns_multimodal_parts_with_image_media(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="s",
         channel="tg",
         content="describe this",
@@ -129,7 +108,7 @@ async def test_build_prompt_returns_multimodal_parts_with_image_media(tmp_path: 
 @pytest.mark.asyncio
 async def test_build_prompt_with_multiple_images(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="s",
         channel="tg",
         content="compare these",
@@ -150,7 +129,7 @@ async def test_build_prompt_with_multiple_images(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_build_prompt_returns_video_url_part_with_video_media(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="s",
         channel="tg",
         content="describe this video",
@@ -173,7 +152,7 @@ async def test_build_prompt_returns_video_url_part_with_video_media(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_build_prompt_skips_video_when_download_is_too_large(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="s",
         channel="tg",
         content="describe this video",
@@ -193,7 +172,7 @@ async def test_build_prompt_skips_video_when_download_is_too_large(tmp_path: Pat
 )
 async def test_build_prompt_returns_input_audio_part(tmp_path: Path, mime_type: str, expected_format: str) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="s",
         channel="tg",
         content="listen to this",
@@ -217,7 +196,7 @@ async def test_build_prompt_returns_input_audio_part(tmp_path: Path, mime_type: 
 @pytest.mark.asyncio
 async def test_build_prompt_skips_remote_audio_url(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="s",
         channel="tg",
         content="listen to this",
@@ -233,7 +212,7 @@ async def test_build_prompt_skips_remote_audio_url(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_build_prompt_command_ignores_media(tmp_path: Path) -> None:
     _, impl = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="s",
         channel="tg",
         content=",help",

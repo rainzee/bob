@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
@@ -11,11 +10,10 @@ import pytest
 from conftest import DemoSettings
 
 from bub.builtin.settings import load_settings
-from bub.channels.message import ChannelMessage
 from bub.configure import ensure_config
 from bub.framework import BubFramework
 from bub.hooks import hookimpl
-from bub.model_selection import ModelChoice, ModelOptions
+from bub.message import Message
 from bub.streaming import StreamState
 
 
@@ -178,11 +176,11 @@ def test_load_hooks_initializes_callable_plugins_after_config_load(
 
 
 @pytest.mark.asyncio
-async def test_process_inbound_runs_model_and_dispatches_outbound() -> None:
+async def test_process_inbound_runs_model_and_saves_state() -> None:
     framework = BubFramework()
     saved_outputs: list[str] = []
 
-    class NonStreamingPlugin:
+    class RuntimePlugin:
         @hookimpl
         def resolve_session(self, message) -> str:
             return "session"
@@ -203,56 +201,11 @@ async def test_process_inbound_runs_model_and_dispatches_outbound() -> None:
         async def save_state(self, session_id, state, message, model_output) -> None:
             saved_outputs.append(model_output)
 
-        @hookimpl
-        def render_outbound(self, message, session_id, state, model_output):
-            return [{"content": model_output, "channel": "cli", "chat_id": "room"}]
+    framework.plugin_manager.register(RuntimePlugin(), name="runtime")
 
-        @hookimpl
-        async def dispatch_outbound(self, message) -> bool:
-            return True
-
-    framework.plugin_manager.register(NonStreamingPlugin(), name="non-streaming")
-
-    result = await framework.process_inbound(
-        ChannelMessage(session_id="s", channel="cli", chat_id="room", content="hi")
-    )
+    result = await framework.process_inbound(Message(session_id="s", channel="cli", chat_id="room", content="hi"))
 
     assert result.model_output == "plain-text"
+    assert result.session_id == "session"
+    assert result.prompt == "prompt"
     assert saved_outputs == ["plain-text"]
-
-
-@pytest.mark.asyncio
-async def test_get_model_options_collects_models_by_priority(tmp_path: Path) -> None:
-    framework = BubFramework()
-
-    class LowPriorityPlugin:
-        @hookimpl
-        def provide_model_options(self, session_id, workspace):
-            assert session_id == "session"
-            assert workspace == tmp_path.resolve()
-            return ModelOptions(
-                models=[ModelChoice(id="low", name="Low")],
-                current_model="low",
-            )
-
-    class HighPriorityPlugin:
-        @hookimpl
-        def provide_model_options(self, session_id, workspace):
-            assert session_id == "session"
-            assert workspace == tmp_path.resolve()
-            return ModelOptions(
-                models=[ModelChoice(id="high", name="High"), ModelChoice(id="mid", name="Mid")],
-                current_model="high",
-            )
-
-    framework.plugin_manager.register(LowPriorityPlugin(), name="low")
-    framework.plugin_manager.register(HighPriorityPlugin(), name="high")
-
-    options = await framework.get_model_options(session_id="session", workspace=tmp_path)
-
-    assert [(choice.id, choice.name) for choice in options.models] == [
-        ("high", "High"),
-        ("mid", "Mid"),
-        ("low", "Low"),
-    ]
-    assert options.current_model == "high"

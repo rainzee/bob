@@ -30,7 +30,6 @@ from loguru import logger
 from pydantic import TypeAdapter, ValidationError
 
 from bub.builtin.settings import AgentSettings, ModelCandidate
-from bub.channels.message import audio_mime_type_from_format
 from bub.errors import BubError, ErrorKind
 from bub.hooks.interception import (
     AgentHooks,
@@ -38,6 +37,7 @@ from bub.hooks.interception import (
     LlmCallRequest,
     LlmCallResult,
 )
+from bub.message import audio_mime_type_from_format
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape
 from bub.tools import Tool, ToolContext, ToolExecutor

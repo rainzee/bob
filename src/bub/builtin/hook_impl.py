@@ -6,14 +6,12 @@ from typing import Any, cast
 
 from bub.builtin.agent import Agent
 from bub.builtin.context import default_tape_context, render_tool_result
-from bub.builtin.settings import load_settings
-from bub.channels.message import ChannelMessage, MediaItem, audio_format_from_mime_type
 from bub.envelope import content_of, field_of
 from bub.errors import BubError
 from bub.framework import BubFramework
 from bub.hooks import hookimpl
 from bub.hooks.interception import ToolCall, ToolCallDecision, ToolCallResult
-from bub.model_selection import ModelChoice, ModelOptions
+from bub.message import MediaItem, Message, audio_format_from_mime_type
 from bub.sidecars import TapeSidecar
 from bub.store import TapeStore
 from bub.streaming import AsyncStreamEvents, StreamState
@@ -25,19 +23,6 @@ DEFAULT_SYSTEM_PROMPT = """\
 <general_instruct>
 Call tools or skills to finish the task.
 </general_instruct>
-<response_instruct>
-Before ending this run, you MUST determine whether a response needs to be sent via channel, checking the following conditions:
-1. Has the user asked you a question waiting for your answer?
-2. Is there any error or important information that needs to be sent to the user immediately?
-3. If it is a casual chat, does the conversation need to be continued?
-
-**IMPORTANT:** Your plain/direct reply in this chat will be ignored.
-**Therefore, you MUST send messages via channel using the correct skill if a response is needed.**
-
-When responding to a channel message, you MUST:
-1. Identify the channel from the message metadata (e.g., `$telegram`, `$discord`)
-2. Send your message as instructed by the channel skill (e.g., `telegram` skill for `$telegram` channel)
-</response_instruct>
 <context_contract>
 Excessively long context may cause model call failures. In this case, you MAY use tape.info to retrieve the token usage and you SHOULD use tape.handoff tool to shorten the retrieved history.
 </context_contract>
@@ -98,14 +83,8 @@ class BuiltinImpl:
                 return str(reasoning_effort) if reasoning_effort else None
         return None
 
-    @staticmethod
-    def _configured_models() -> list[str]:
-        settings = load_settings()
-        models = [settings.model, *(settings.fallback_models or [])]
-        return list(dict.fromkeys(model for model in models if model))
-
     @hookimpl
-    def resolve_session(self, message: ChannelMessage) -> str:
+    def resolve_session(self, message: Message) -> str:
         session_id = field_of(message, "session_id")
         if session_id is not None and str(session_id).strip():
             return str(session_id)
@@ -114,7 +93,7 @@ class BuiltinImpl:
         return f"{channel}:{chat_id}"
 
     @hookimpl
-    async def load_state(self, message: ChannelMessage, session_id: str) -> TurnState:
+    async def load_state(self, message: Message, session_id: str) -> TurnState:
         # SDK calls supply their agent before recovery so state comes from its store.
         agent = field_of(message, "_runtime_agent")
         if agent is None:
@@ -136,7 +115,7 @@ class BuiltinImpl:
         return state
 
     @hookimpl
-    async def build_prompt(self, message: ChannelMessage, session_id: str, state: TurnState) -> str | list[dict]:
+    async def build_prompt(self, message: Message, session_id: str, state: TurnState) -> str | list[dict]:
         content = content_of(message)
         if content.startswith(","):
             message.kind = "command"
@@ -184,22 +163,6 @@ class BuiltinImpl:
         if "context" in tape.context.state:
             return f"{DEFAULT_CONTINUE_PROMPT} [context: {tape.context.state['context']}]"
         return DEFAULT_CONTINUE_PROMPT
-
-    @hookimpl
-    def provide_model_options(
-        self,
-        session_id: str,
-        workspace: Path | None = None,
-    ) -> ModelOptions | None:
-        del session_id, workspace
-        models = self._configured_models()
-        if not models:
-            return None
-
-        return ModelOptions(
-            models=[ModelChoice(id=model, name=model) for model in models],
-            current_model=models[0],
-        )
 
     def _read_agents_file(self, state: TurnState) -> str:
         workspace = state.get("_runtime_workspace", str(Path.cwd()))

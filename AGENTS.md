@@ -6,7 +6,7 @@ Core code lives under `src/`:
 
 - `src/bub/framework.py`: turn orchestration, hook loading, and resource lifecycle.
 - `src/bub/hooks/`: hook specifications, execution helpers, and interception contracts.
-- `src/bub/channels/message.py`: the concrete message envelope (`ChannelMessage`) and media items.
+- `src/bub/message.py`: the concrete inbound envelope (`Message`) and media items.
 - `src/bub/{envelope,turn,streaming,errors,model_selection}.py`: small kernel vocabulary owned by each concern.
 - `src/bub/builtin/`: builtin runtime, settings, tools, tape services, and provider adapters.
 - `src/bub/skills.py` / `src/bub/tools.py`: skill discovery and tool registry.

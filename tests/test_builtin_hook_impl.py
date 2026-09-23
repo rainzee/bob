@@ -8,24 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from bub.builtin.hook_impl import AGENTS_FILE_NAME, DEFAULT_CONTINUE_PROMPT, DEFAULT_SYSTEM_PROMPT, BuiltinImpl
-from bub.channels.message import ChannelMessage
 from bub.framework import BubFramework
+from bub.message import Message
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape, TapeContext
 from bub.tools import REGISTRY
-
-
-class RecordingLifespan:
-    def __init__(self) -> None:
-        self.entered = False
-        self.exit_args: tuple[object, object, object] | None = None
-
-    async def __aenter__(self) -> None:
-        self.entered = True
-
-    async def __aexit__(self, exc_type, exc, traceback) -> None:
-        self.exit_args = (exc_type, exc, traceback)
 
 
 def _fake_tape(home: Path) -> Tape:
@@ -81,7 +69,7 @@ def _build_impl(tmp_path: Path, config_file: Path | None = None) -> tuple[BubFra
 def test_resolve_session_prefers_explicit_session_id(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
 
-    message = ChannelMessage(session_id="  keep-me  ", channel="cli", chat_id="room", content="hello")
+    message = Message(session_id="  keep-me  ", channel="cli", chat_id="room", content="hello")
 
     assert impl.resolve_session(message) == "  keep-me  "
 
@@ -106,18 +94,19 @@ def test_continue_prompt_includes_tape_context(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_load_state_assembles_context_and_agent(tmp_path: Path) -> None:
     _, impl, agent = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="session",
         channel="cli",
         chat_id="room",
         content="hello",
+        context={"tenant": "acme"},
     )
 
     state = await impl.load_state(message=message, session_id="resolved-session")
 
     assert state["session_id"] == "resolved-session"
     assert state["_runtime_agent"] is agent
-    assert state["context"] == message.context_str
+    assert state["context"] == message.context_str == "tenant=acme"
 
 
 @pytest.mark.asyncio
@@ -127,7 +116,7 @@ async def test_load_state_injects_model_recorded_on_session_tape(tmp_path: Path)
     session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
     await session.append_event("model_switch", {"model": "openai:gpt-4o"})
 
-    message = ChannelMessage(session_id="session", channel="cli", chat_id="room", content="hello")
+    message = Message(session_id="session", channel="cli", chat_id="room", content="hello")
 
     state = await impl.load_state(message=message, session_id="resolved-session")
 
@@ -140,7 +129,7 @@ async def test_load_state_injects_reasoning_effort_recorded_on_session_tape(tmp_
     session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
     await session.append_event("reasoning_effort_switch", {"reasoning_effort": "high"})
 
-    message = ChannelMessage(session_id="session", channel="cli", chat_id="room", content="hello")
+    message = Message(session_id="session", channel="cli", chat_id="room", content="hello")
 
     state = await impl.load_state(message=message, session_id="resolved-session")
 
@@ -152,7 +141,7 @@ async def test_load_state_does_not_inject_model_for_unknown_session(tmp_path: Pa
     """A session with nothing recorded on its tape must not inherit any model (no leakage)."""
     _, impl, _ = _build_impl(tmp_path)
 
-    message = ChannelMessage(session_id="session", channel="cli", chat_id="room", content="hello")
+    message = Message(session_id="session", channel="cli", chat_id="room", content="hello")
 
     state = await impl.load_state(message=message, session_id="fresh-session")
 
@@ -173,17 +162,20 @@ async def test_recover_session_model_returns_latest_recorded(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_build_prompt_marks_commands_and_prefixes_context(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
-    command = ChannelMessage(session_id="s", channel="cli", chat_id="room", content=",help")
-    normal = ChannelMessage(session_id="s", channel="cli", chat_id="room", content="hello")
+    command = Message(session_id="s", channel="cli", chat_id="room", content=",help")
+    normal = Message(session_id="s", channel="cli", chat_id="room", content="hello", context={"tenant": "acme"})
+    plain = Message(session_id="s", channel="cli", chat_id="room", content="hello")
 
     command_prompt = await impl.build_prompt(command, session_id="s", state={})
     normal_prompt = await impl.build_prompt(normal, session_id="s", state={})
+    plain_prompt = await impl.build_prompt(plain, session_id="s", state={})
 
     assert command_prompt == ",help"
     assert command.kind == "command"
     prompt_lines = normal_prompt.splitlines()
     assert prompt_lines[0] == normal.context_str
     assert prompt_lines[2] == "hello"
+    assert plain_prompt.splitlines()[-1] == "hello"
 
 
 @pytest.mark.asyncio
@@ -198,7 +190,7 @@ async def test_build_prompt_uses_system_timezone_for_context_date(
     time.tzset()
     try:
         _, impl, _ = _build_impl(tmp_path)
-        message = ChannelMessage(session_id="s", channel="cli", chat_id="room", content="hello")
+        message = Message(session_id="s", channel="cli", chat_id="room", content="hello")
 
         prompt = await impl.build_prompt(message, session_id="s", state={})
 
@@ -229,7 +221,7 @@ async def test_run_model_stream_delegates_to_agent(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_runtime_model_override_is_passed_to_agent(tmp_path: Path) -> None:
     _, impl, agent = _build_impl(tmp_path)
-    message = ChannelMessage(
+    message = Message(
         session_id="session",
         channel="cli",
         chat_id="room",
@@ -265,27 +257,6 @@ async def test_run_model_stream_passes_none_when_state_has_no_model(tmp_path: Pa
     await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
 
     assert agent.run_stream_calls[-1][3] is None
-
-
-def test_builtin_provides_model_runtime_options(tmp_path: Path, load_config) -> None:
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.delenv("BUB_MODEL", raising=False)
-        monkeypatch.delenv("BUB_FALLBACK_MODELS", raising=False)
-        config_file = load_config(
-            """
-model: openai:gpt-5
-fallback_models:
-  - anthropic:claude-sonnet-4-5
-  - openai:gpt-5
-""".strip()
-        )
-        _, impl, _ = _build_impl(tmp_path, config_file=config_file)
-
-        options = impl.provide_model_options(session_id="session")
-
-        assert options is not None
-        assert options.current_model == "openai:gpt-5"
-        assert [item.id for item in options.models] == ["openai:gpt-5", "anthropic:claude-sonnet-4-5"]
 
 
 def test_system_prompt_appends_workspace_agents_file(tmp_path: Path) -> None:

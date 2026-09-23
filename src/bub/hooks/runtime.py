@@ -89,26 +89,6 @@ class HookRuntime:
                     impl.plugin_name or "<unknown>",
                 )
 
-    def notify_error_sync(self, *, stage: str, error: Exception, message: Envelope | None) -> None:
-        """Synchronous on-error dispatch for bootstrap paths."""
-
-        for impl in self._iter_hookimpls("on_error"):
-            call_kwargs = self._kwargs_for_impl(impl, {"stage": stage, "error": error, "message": message})
-            try:
-                value = impl.function(**call_kwargs)
-            except Exception:
-                logger.opt(exception=True).warning(
-                    "hook.on_error_failed stage={} adapter={}",
-                    stage,
-                    impl.plugin_name or "<unknown>",
-                )
-                continue
-            if inspect.isawaitable(value):
-                logger.warning(
-                    "hook.async_not_supported hook=on_error adapter={}",
-                    impl.plugin_name or "<unknown>",
-                )
-
     def hook_report(self) -> dict[str, list[str]]:
         """Build a hook-to-adapters mapping for diagnostics."""
 

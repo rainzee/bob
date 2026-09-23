@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -52,57 +51,6 @@ def load(config_file: Path) -> dict[str, Any]:
     return _config_data
 
 
-def merge(base: dict[str, Any], *updates: dict[str, Any]) -> dict[str, Any]:
-    """Update base in place with config updates, preferring incoming values on conflict."""
-
-    for update in updates:
-        _merge_into(base, update, path=())
-    return base
-
-
-def validate(config_data: dict[str, Any]) -> dict[str, Any]:
-    """Validate config data against all registered config classes."""
-
-    for section, config_classes in CONFIG_MAP.items():
-        section_data = config_data if section == ROOT else config_data.get(section, {})
-        for config_cls in config_classes:
-            _validation_config(config_cls)(**section_data)
-    return config_data
-
-
-@cache
-def _validation_config(config_cls: type[BaseSettings]) -> type[BaseSettings]:
-    def settings_customise_sources(
-        cls: type[BaseSettings],
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        del cls, settings_cls, env_settings, dotenv_settings, file_secret_settings
-        return (init_settings,)
-
-    return type(
-        f"{config_cls.__name__}Validation",
-        (config_cls,),
-        {
-            "__module__": config_cls.__module__,
-            "settings_customise_sources": classmethod(settings_customise_sources),
-        },
-    )
-
-
-def save(config_file: Path, config_data: dict[str, Any]) -> None:
-    """Validate and persist config data to a YAML file."""
-    import yaml
-
-    validated = validate(config_data)
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    with config_file.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(validated, f, sort_keys=False)
-
-
 def ensure_config[C: BaseSettings](config_cls: type[C]) -> C:
     """No-op function to ensure a config class is registered and can be imported."""
     section = getattr(config_cls, "__config_name__", ROOT)
@@ -136,16 +84,6 @@ def get_value(path: str, default: Any = MISSING) -> Any:
     raise KeyError(path)
 
 
-def _copy_dict(data: dict[str, Any]) -> dict[str, Any]:
-    copied: dict[str, Any] = {}
-    for key, value in data.items():
-        if isinstance(value, dict):
-            copied[key] = _copy_dict(value)
-        else:
-            copied[key] = value
-    return copied
-
-
 def _lookup_registered_config(parts: list[str]) -> Any:
     section, *subpath = parts
     if section in CONFIG_MAP and section != ROOT:
@@ -174,15 +112,3 @@ def _lookup_path(value: Any, parts: list[str]) -> Any:
             return MISSING
         current = getattr(current, part)
     return current
-
-
-def _merge_into(target: dict[str, Any], incoming: dict[str, Any], path: tuple[str, ...]) -> None:
-    for key, value in incoming.items():
-        existing = target.get(key)
-        if key not in target:
-            target[key] = _copy_dict(value) if isinstance(value, dict) else value
-            continue
-        if isinstance(existing, dict) and isinstance(value, dict):
-            _merge_into(existing, value, path=(*path, key))
-            continue
-        target[key] = _copy_dict(value) if isinstance(value, dict) else value

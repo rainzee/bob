@@ -60,9 +60,7 @@ From a checkout, `uv sync` is enough; for local development use `make install` s
 Every inbound message goes through one turn pipeline. Each stage is a hook.
 
 ```
-resolve_session → load_state → build_prompt → run_model
-                                                   ↓
-              dispatch_outbound ← render_outbound ← save_state
+resolve_session → load_state → build_prompt → run_model → save_state
 ```
 
 Builtins are registered first. External plugins load after them. At runtime, later plugins take precedence. There are no framework-only shortcuts.

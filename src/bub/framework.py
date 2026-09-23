@@ -13,11 +13,10 @@ from dotenv import find_dotenv, load_dotenv
 from loguru import logger
 
 from bub import configure
-from bub.envelope import Envelope, content_of, field_of, unpack_batch
+from bub.envelope import Envelope, content_of, field_of
 from bub.hooks.interception import AgentHooks
 from bub.hooks.runtime import HookRuntime
 from bub.hooks.specs import BUB_HOOK_NAMESPACE, BubHookSpecs
-from bub.model_selection import ModelOptions
 from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
 from bub.streaming import StreamState
@@ -137,11 +136,7 @@ class BubFramework:
         return state
 
     async def process_inbound(self, inbound: Envelope) -> TurnResult:
-        """Resolve, execute, save, render, and dispatch one complete message turn.
-
-        Returns a completed TurnResult; streaming events are consumed internally when
-        the model skill returns a stream.
-        """
+        """Resolve, execute, and save one complete message turn."""
 
         try:
             session_id = await self.resolve_session(inbound)
@@ -161,14 +156,10 @@ class BubFramework:
                     model_output=model_output,
                 )
 
-            outbounds = await self._collect_outbounds(inbound, session_id, state, model_output)
-            for outbound in outbounds:
-                await self._hook_runtime.call_many("dispatch_outbound", message=outbound)
             return TurnResult(
                 session_id=session_id,
                 prompt=prompt,
                 model_output=model_output,
-                outbounds=outbounds,
                 state=state,
             )
         except Exception as exc:
@@ -204,38 +195,6 @@ class BubFramework:
 
         return self._hook_runtime.hook_report()
 
-    async def get_model_options(
-        self,
-        *,
-        session_id: str,
-        workspace: str | Path | None = None,
-    ) -> ModelOptions:
-        """Collect model choices for one session."""
-
-        resolved_workspace = self._resolve_workspace(workspace)
-        results = await self._hook_runtime.call_many(
-            "provide_model_options",
-            session_id=session_id,
-            workspace=resolved_workspace,
-        )
-
-        merged = ModelOptions()
-        for result in results:
-            if result is None:
-                continue
-            if not isinstance(result, ModelOptions):
-                raise TypeError("hook.provide_model_options must return ModelOptions or None")
-            merged = ModelOptions(
-                models=[*merged.models, *result.models],
-                current_model=merged.current_model or result.current_model,
-            )
-        return merged
-
-    def _resolve_workspace(self, workspace: str | Path | None) -> Path:
-        if workspace is None:
-            return self.workspace
-        return Path(workspace).expanduser().resolve()
-
     @staticmethod
     def _default_session_id(message: Envelope) -> str:
         session_id = field_of(message, "session_id")
@@ -244,38 +203,6 @@ class BubFramework:
         channel = str(field_of(message, "channel", "default"))
         chat_id = str(field_of(message, "chat_id", "default"))
         return f"{channel}:{chat_id}"
-
-    async def _collect_outbounds(
-        self,
-        message: Envelope,
-        session_id: str,
-        state: dict[str, Any],
-        model_output: str,
-    ) -> list[Envelope]:
-        batches = await self._hook_runtime.call_many(
-            "render_outbound",
-            message=message,
-            session_id=session_id,
-            state=state,
-            model_output=model_output,
-        )
-        outbounds: list[Envelope] = []
-        for batch in batches:
-            outbounds.extend(unpack_batch(batch))
-        if outbounds:
-            return outbounds
-
-        fallback: dict[str, Any] = {
-            "content": model_output,
-            "session_id": session_id,
-        }
-        channel = field_of(message, "channel")
-        chat_id = field_of(message, "chat_id")
-        if channel is not None:
-            fallback["channel"] = channel
-        if chat_id is not None:
-            fallback["chat_id"] = chat_id
-        return [fallback]
 
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncGenerator[contextlib.AsyncExitStack, None]:

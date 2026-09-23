@@ -6,75 +6,30 @@ from unittest.mock import patch
 
 import pytest
 from conftest import DemoSettings
-from pydantic import ValidationError
 
 import bub.configure as configure
 from bub.builtin.settings import AgentSettings
 
 
-def test_merge_recursively_combines_non_conflicting_dicts() -> None:
-    base = {"model": "openai:gpt-5", "demo": {"token": "token"}}
-
-    result = configure.merge(
-        base,
-        {"demo": {"allow_users": "1,2"}},
-    )
-
-    assert result is base
-    assert result == {
-        "model": "openai:gpt-5",
-        "demo": {
-            "token": "token",
-            "allow_users": "1,2",
-        },
-    }
-
-
-def test_merge_overrides_conflicting_scalar_values() -> None:
-    base = {"model": "openai:gpt-5"}
-
-    result = configure.merge(base, {"model": "anthropic:claude-3-7-sonnet"})
-
-    assert result is base
-    assert base == {"model": "anthropic:claude-3-7-sonnet"}
-
-
-def test_validate_checks_registered_config_sections() -> None:
-    valid_data = {
-        "model": "openai:gpt-5",
-        "demo": {"token": "123:abc"},
-    }
-
-    assert configure.validate(valid_data) == valid_data
-
-    with pytest.raises(ValidationError):
-        configure.validate({"max_steps": "not-an-int"})
-
-
-def test_save_writes_yaml_and_refreshes_loaded_config(tmp_path: Path) -> None:
+def test_load_registers_root_and_named_config_sections(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yml"
     expected_token = "123:abc"  # noqa: S105
+    config_file.write_text(
+        f"""
+model: openai:gpt-5
+demo:
+  token: {expected_token}
+""".strip(),
+        encoding="utf-8",
+    )
 
     with patch.dict(os.environ, {}, clear=True):
-        previous_cwd = Path.cwd()
-        os.chdir(tmp_path)
-        configure.save(
-            config_file,
-            {
-                "model": "openai:gpt-5",
-                "demo": {"token": expected_token},
-            },
-        )
+        loaded = configure.load(config_file)
 
-        try:
-            loaded = configure.load(config_file)
-
-            assert loaded["model"] == "openai:gpt-5"
-            assert loaded["demo"]["token"] == expected_token
-            assert configure.ensure_config(AgentSettings).model == "openai:gpt-5"
-            assert configure.ensure_config(DemoSettings).token == expected_token
-        finally:
-            os.chdir(previous_cwd)
+        assert loaded["model"] == "openai:gpt-5"
+        assert loaded["demo"]["token"] == expected_token
+        assert configure.ensure_config(AgentSettings).model == "openai:gpt-5"
+        assert configure.ensure_config(DemoSettings).token == expected_token
 
 
 def test_get_value_reads_registered_section_from_yaml(load_config) -> None:

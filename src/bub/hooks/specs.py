@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
-from pathlib import Path
 
 import pluggy
 
@@ -16,7 +15,6 @@ from bub.hooks.interception import (
     ToolCallDecision,
     ToolCallResult,
 )
-from bub.model_selection import ModelOptions
 from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
 from bub.streaming import AsyncStreamEvents, StreamState
@@ -84,30 +82,6 @@ class BubHookSpecs:
         model_output: str,
     ) -> None:
         """Persist state updates after one model turn."""
-
-    @hookspec
-    def render_outbound(
-        self,
-        message: Envelope,
-        session_id: str,
-        state: TurnState,
-        model_output: str,
-    ) -> list[Envelope]:
-        """Render outbound messages from model output."""
-        raise NotImplementedError
-
-    @hookspec
-    def dispatch_outbound(self, message: Envelope) -> bool:
-        """Dispatch one outbound message to external channel(s)."""
-        raise NotImplementedError
-
-    @hookspec
-    def provide_model_options(
-        self,
-        session_id: str,
-        workspace: Path | None,
-    ) -> ModelOptions | None:
-        """Provide model choices for a session."""
 
     @hookspec
     def on_error(self, stage: str, error: Exception, message: Envelope | None) -> None:
