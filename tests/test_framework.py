@@ -172,7 +172,9 @@ def test_load_hooks_initializes_callable_plugins_after_config_load(
 
         framework.load_hooks()
 
-    assert framework._plugin_status["config-plugin"].is_success is True
+    plugin = framework.plugin_manager.get_plugin("config-plugin")
+    assert isinstance(plugin, SettingsAwarePlugin)
+    assert plugin.model == "openai:gpt-5"
 
 
 @pytest.mark.asyncio

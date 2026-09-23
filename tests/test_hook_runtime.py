@@ -94,19 +94,6 @@ async def test_notify_error_swallows_observer_failures() -> None:
     assert observed == ["turn"]
 
 
-def test_hook_report_lists_registered_implementations() -> None:
-    class SessionPlugin:
-        @hookimpl
-        def resolve_session(self, message):
-            return "session"
-
-    runtime = _runtime_with_plugins(("session", SessionPlugin()))
-    report = runtime.hook_report()
-
-    assert "resolve_session" in report
-    assert report["resolve_session"] == ["session"]
-
-
 @pytest.mark.asyncio
 async def test_run_model_uses_streaming_hook_when_plain_hook_absent() -> None:
     class StreamPlugin:

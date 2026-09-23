@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,12 +28,6 @@ DEFAULT_HOME = Path.home() / ".bub"
 DEFAULT_CONFIG_FILE = (DEFAULT_HOME / "config.yml").resolve()
 
 
-@dataclass(frozen=True)
-class PluginStatus:
-    is_success: bool
-    detail: str | None = None
-
-
 class BubFramework:
     """Minimal framework core. Everything grows from hook skills."""
 
@@ -50,7 +43,6 @@ class BubFramework:
         self._plugin_manager.add_hookspecs(BubHookSpecs)
         self._hook_runtime = HookRuntime(self._plugin_manager)
         self._agent_hooks = AgentHooks(self._hook_runtime)
-        self._plugin_status: dict[str, PluginStatus] = {}
         self._tape_store: TapeStore | AsyncTapeStore | None = None
         configure.load(self.config_file)
 
@@ -62,20 +54,16 @@ class BubFramework:
         """Load Bub's builtin hook implementations."""
         from bub.builtin.hook_impl import BuiltinImpl
 
-        impl = BuiltinImpl(self)
-
         try:
-            self._plugin_manager.register(impl, name="builtin")
+            self._plugin_manager.register(BuiltinImpl(self), name="builtin")
         except Exception as exc:
-            self._plugin_status["builtin"] = PluginStatus(is_success=False, detail=str(exc))
-        else:
-            self._plugin_status["builtin"] = PluginStatus(is_success=True)
+            logger.warning("Failed to load builtin hooks: {}", exc)
 
     def load_hooks(self) -> None:
         """Load builtin hooks, then plugins from the ``bub`` entry-point group.
 
-        Callable entry points receive this framework. Failed plugins are recorded
-        for diagnostics without preventing the remaining plugins from loading.
+        Callable entry points receive this framework. A plugin that fails to load
+        or initialize is logged and skipped so the remaining plugins still load.
         """
         import importlib.metadata
 
@@ -87,7 +75,6 @@ class BubFramework:
                 plugin = entry_point.load()
             except Exception as exc:
                 logger.warning(f"Failed to load plugin '{entry_point.name}': {exc}")
-                self._plugin_status[entry_point.name] = PluginStatus(is_success=False, detail=str(exc))
             else:
                 pending_plugins.append((entry_point.name, plugin))
 
@@ -98,9 +85,6 @@ class BubFramework:
                 self._plugin_manager.register(plugin, name=plugin_name)
             except Exception as exc:
                 logger.warning(f"Failed to initialize plugin '{plugin_name}': {exc}")
-                self._plugin_status[plugin_name] = PluginStatus(is_success=False, detail=str(exc))
-            else:
-                self._plugin_status[plugin_name] = PluginStatus(is_success=True)
 
     async def build_prompt(
         self, message: Envelope, session_id: str, state: dict[str, Any]
@@ -189,11 +173,6 @@ class BubFramework:
             )
             return prompt if isinstance(prompt, str) else content_of(inbound)
         return output
-
-    def hook_report(self) -> dict[str, list[str]]:
-        """Return hook implementation summary for diagnostics."""
-
-        return self._hook_runtime.hook_report()
 
     @staticmethod
     def _default_session_id(message: Envelope) -> str:
