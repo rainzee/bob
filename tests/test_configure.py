@@ -5,25 +5,25 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from conftest import DemoSettings
 from pydantic import ValidationError
 
 import bub.configure as configure
 from bub.builtin.settings import AgentSettings
-from bub.channels.telegram import TelegramSettings
 
 
 def test_merge_recursively_combines_non_conflicting_dicts() -> None:
-    base = {"model": "openai:gpt-5", "telegram": {"token": "token"}}
+    base = {"model": "openai:gpt-5", "demo": {"token": "token"}}
 
     result = configure.merge(
         base,
-        {"telegram": {"allow_users": "1,2"}},
+        {"demo": {"allow_users": "1,2"}},
     )
 
     assert result is base
     assert result == {
         "model": "openai:gpt-5",
-        "telegram": {
+        "demo": {
             "token": "token",
             "allow_users": "1,2",
         },
@@ -42,7 +42,7 @@ def test_merge_overrides_conflicting_scalar_values() -> None:
 def test_validate_checks_registered_config_sections() -> None:
     valid_data = {
         "model": "openai:gpt-5",
-        "telegram": {"token": "123:abc"},
+        "demo": {"token": "123:abc"},
     }
 
     assert configure.validate(valid_data) == valid_data
@@ -62,7 +62,7 @@ def test_save_writes_yaml_and_refreshes_loaded_config(tmp_path: Path) -> None:
             config_file,
             {
                 "model": "openai:gpt-5",
-                "telegram": {"token": expected_token},
+                "demo": {"token": expected_token},
             },
         )
 
@@ -70,9 +70,9 @@ def test_save_writes_yaml_and_refreshes_loaded_config(tmp_path: Path) -> None:
             loaded = configure.load(config_file)
 
             assert loaded["model"] == "openai:gpt-5"
-            assert loaded["telegram"]["token"] == expected_token
+            assert loaded["demo"]["token"] == expected_token
             assert configure.ensure_config(AgentSettings).model == "openai:gpt-5"
-            assert configure.ensure_config(TelegramSettings).token == expected_token
+            assert configure.ensure_config(DemoSettings).token == expected_token
         finally:
             os.chdir(previous_cwd)
 
@@ -81,26 +81,26 @@ def test_get_value_reads_registered_section_from_yaml(load_config) -> None:
     with patch.dict(os.environ, {}, clear=True):
         load_config(
             """
-telegram:
+demo:
   token: yaml-token
 """.strip(),
         )
 
-        assert configure.get_value("telegram.token") == "yaml-token"
+        assert configure.get_value("demo.token") == "yaml-token"
 
 
 def test_get_value_prefers_registered_env_over_yaml(load_config) -> None:
     load_config(
         """
-telegram:
+demo:
   token: yaml-token
 """.strip(),
     )
 
-    with patch.dict(os.environ, {"BUB_TELEGRAM_TOKEN": "env-token"}, clear=True):
+    with patch.dict(os.environ, {"BUB_DEMO_TOKEN": "env-token"}, clear=True):
         configure._global_config.clear()
 
-        assert configure.get_value("telegram.token") == "env-token"
+        assert configure.get_value("demo.token") == "env-token"
 
 
 def test_get_value_descends_into_registered_dict_field(load_config) -> None:

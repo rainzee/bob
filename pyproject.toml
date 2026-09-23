@@ -25,17 +25,10 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.0",
     "pluggy>=1.6.0",
-    "inquirer-textual>=0.5.1",
-    "typer>=0.9.0",
-    "authlib>=1.7.2",
     "any-llm-sdk[anthropic]",
-    "rich>=13.0.0",
-    "prompt-toolkit>=3.0.0",
-    "python-telegram-bot>=21.0",
     "loguru>=0.7.2",
     "rapidfuzz>=3.14.3",
     "aiohttp>=3.13.3",
-    "httpx[socks]>=0.28.1",
     "typing-extensions>=4.13.0",
 ]
 
@@ -44,18 +37,11 @@ Homepage = "https://bub.build"
 Repository = "https://github.com/bubbuild/bub"
 Documentation = "https://bub.build"
 
-[project.scripts]
-bub = "bub.__main__:app"
-
 [project.optional-dependencies]
 trace = [
     "opentelemetry-api>=1.39.0",
     "opentelemetry-sdk>=1.39.0",
     "opentelemetry-exporter-otlp-proto-http>=1.39.0",
-]
-logfire = [
-    "bub[trace]",
-    "logfire>=4.31.0",
 ]
 
 [dependency-groups]

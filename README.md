@@ -13,35 +13,46 @@
 
 Bub is a small Python runtime for building agents in shared environments. It started in group chats, where multiple humans and agents had to work in the same conversation without hidden state, hand-wavy memory, or framework-specific magic.
 
-Built on [agents.md](https://agents.md/) and [Agent Skills](https://agentskills.io/) , Bub stays intentionally small. Every turn stage is a [pluggy](https://pluggy.readthedocs.io/) hook. Builtins are included but replaceable. The same runtime drives CLI, Telegram, and any channel you add.
+Built on [agents.md](https://agents.md/) and [Agent Skills](https://agentskills.io/) , Bub stays intentionally small. Every turn stage is a [pluggy](https://pluggy.readthedocs.io/) hook. Builtins are included but replaceable. Bub is a library: channels, CLIs, and deployment shells are the host application's business.
 
-[Website](https://bub.build) · [GitHub](https://github.com/bubbuild/bub)
+[GitHub](https://github.com/rainzee/bob)
 
 ## Quick Start
 
-Install from source:
-
 ```bash
-git clone https://github.com/rainzee/bob.git
-cd bob
-uv sync
+uv add bub
 ```
 
-For local development, use `make install` instead so `prek` hooks are installed too.
+```python
+import asyncio
 
-The CLI entry point is a development aid; the supported surface is the Python API.
+from bub import BubFramework
+from bub.builtin import Agent
+from bub.store import FileTapeStore
 
-```bash
-bub run "summarize this repo"    # one-shot task through the full pipeline
-bub chat                         # interactive REPL
+
+async def main() -> None:
+    framework = BubFramework()
+    framework.load_builtin_hooks()
+    agent = Agent(framework, tape_store=FileTapeStore("sessions"))
+    async with framework.running():
+        stream = await agent.run_stream(session_id="demo", prompt="Hello")
+        async for event in stream:
+            if event.kind == "text":
+                print(event.data.get("delta", ""), end="")
+
+
+asyncio.run(main())
 ```
+
+From a checkout, `uv sync` is enough; for local development use `make install` so `prek` hooks are installed too.
 
 ## Why Bub
 
 - **Composable by design.** Every turn stage is a plugin hook. Override one stage or replace the whole flow without forking the runtime.
 - **Tape context.** Context is rebuilt from append-only records, not carried around as mutable session state. Easier to inspect, replay, and hand off.
-- **One runtime across surfaces.** The same inbound pipeline runs across CLI, Telegram, and custom channels. Adapters change the surface, not the runtime model.
-- **Batteries included.** CLI, Telegram, tools, skills, and model execution ship with the core runtime. Use the defaults first, replace them later.
+- **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel, REPL, or transport is baked in.
+- **Batteries included.** Tools, skills, tape stores, and model execution ship with the runtime. Use the defaults first, replace them later.
 - **Operator equivalence.** Humans and agents work inside the same runtime boundaries, with the same evidence trail and handoff model. No hidden operator class.
 
 ## How It Works
@@ -90,27 +101,16 @@ echo = "my_package.plugin:echo_plugin"
 
 See the [Build docs](https://bub.build/docs/build/) for hook guides, packaging, and plugin structure.
 
-## CLI
+## Internal commands
 
-| Command            | Description                       |
-| ------------------ | --------------------------------- |
-| `bub chat`         | Interactive REPL                  |
-| `bub run MESSAGE`  | One-shot turn                     |
-| `bub gateway`      | Channel listener (Telegram, etc.) |
-| `bub install`      | Install or sync Bub plugin deps   |
-| `bub update`       | Upgrade Bub plugin deps           |
-| `bub login openai` | OpenAI Codex OAuth                |
-
-Lines starting with `,` enter internal command mode (`,help`, `,skill name=my-skill`, `,fs.read path=README.md`).
-
-`bub hooks` still exists for diagnostics, but it is hidden from top-level help. `bub install` and `bub update` manage a separate uv project for Bub plugins, defaulting to `~/.bub/bub-project` or `BUB_PROJECT`.
+Prompts starting with `,` run an internal command instead of a model turn (`,help`, `,skill name=my-skill`, `,fs.read path=README.md`).
 
 ## Configuration
 
 | Variable                    | Default                      | Description                                          |
 | --------------------------- | ---------------------------- | ---------------------------------------------------- |
 | `BUB_MODEL`                 | `openrouter:openrouter/free` | Model identifier                                     |
-| `BUB_API_KEY`               | —                            | Provider key (optional with `bub login openai`)      |
+| `BUB_API_KEY`               | —                            | Provider key                                         |
 | `BUB_API_BASE`              | —                            | Custom provider endpoint                             |
 | `BUB_CLIENT_ARGS`           | —                            | JSON object forwarded to the underlying model client |
 | `BUB_COMPLETION_ARGS`       | —                            | JSON object forwarded to each completion call         |
@@ -133,10 +133,10 @@ Read more:
 
 - [Getting Started](https://bub.build/docs/getting-started/) — install Bub and run the first turn
 - [Concepts](https://bub.build/docs/concepts/) — the mental model behind the runtime
-- [Channels](https://bub.build/docs/operate/channels/) — run Bub in CLI, Telegram, or your own channel
 - [Skills](https://bub.build/docs/build/skills/) — discover, inspect, and author Agent Skills in Bub
 - [Build](https://bub.build/docs/build/) — write plugins, override hooks, ship tools and skills
-- [Deployment](https://bub.build/docs/operate/deploy/) — Docker, environment, upgrades
+
+Some of these pages describe the upstream CLI and channel packages that this repository no longer ships.
 
 ## Development
 

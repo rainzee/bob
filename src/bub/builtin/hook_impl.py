@@ -1,24 +1,14 @@
-import sys
 from collections.abc import AsyncIterator
 from datetime import datetime
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, cast
 
-import typer
-from loguru import logger
-
-from bub import inquirer as bub_inquirer
 from bub.builtin.agent import Agent
 from bub.builtin.context import default_tape_context, render_tool_result
-from bub.builtin.onboarding import collect_model_config
 from bub.builtin.settings import load_settings
-from bub.builtin.steering import InMemorySteeringInbox
-from bub.channels.admission import AdmitDecision, SteeringInbox, TurnSnapshot
-from bub.channels.base import Channel
-from bub.channels.contracts import MessageHandler
 from bub.channels.message import ChannelMessage, MediaItem, audio_format_from_mime_type
-from bub.envelope import Envelope, content_of, field_of
+from bub.envelope import content_of, field_of
 from bub.errors import BubError
 from bub.framework import BubFramework
 from bub.hooks import hookimpl
@@ -109,20 +99,6 @@ class BuiltinImpl:
         return None
 
     @staticmethod
-    async def _discard_message(_: ChannelMessage) -> None:
-        return
-
-    def _channel_choices(self) -> list[str]:
-        return [c for c in self.framework.get_channels(self._discard_message) if c != "cli"]
-
-    @staticmethod
-    def _default_enabled_channels(current_value: object, available_channels: list[str]) -> list[str]:
-        if isinstance(current_value, str) and current_value.strip() and current_value.strip().lower() != "all":
-            selected = [name.strip() for name in current_value.split(",") if name.strip() in available_channels]
-            return selected
-        return available_channels
-
-    @staticmethod
     def _configured_models() -> list[str]:
         settings = load_settings()
         models = [settings.model, *(settings.fallback_models or [])]
@@ -139,14 +115,11 @@ class BuiltinImpl:
 
     @hookimpl
     async def load_state(self, message: ChannelMessage, session_id: str) -> TurnState:
-        lifespan = field_of(message, "lifespan")
-        if lifespan is not None:
-            await lifespan.__aenter__()
         # SDK calls supply their agent before recovery so state comes from its store.
         agent = field_of(message, "_runtime_agent")
         if agent is None:
             agent = self._get_agent()
-        state = {"session_id": session_id, "_runtime_agent": agent}
+        state: TurnState = {"session_id": session_id, "_runtime_agent": agent}
         if context := field_of(message, "context_str"):
             state["context"] = context
         # Carry over a previously recorded per-session model override from the
@@ -161,15 +134,6 @@ class BuiltinImpl:
         if thread_id := field_of(message, "context", {}).get("thread_id"):
             state["_runtime_thread_id"] = thread_id
         return state
-
-    @hookimpl
-    async def save_state(self, session_id: str, state: TurnState, message: ChannelMessage, model_output: str) -> None:
-        tp, value, traceback = sys.exc_info()
-        lifespan = field_of(message, "lifespan")
-        if lifespan is not None:
-            await lifespan.__aexit__(tp, value, traceback)
-        # Per-session completion overrides are persisted by their tools as tape
-        # events, so nothing to write here — this hook only closes the lifespan.
 
     @hookimpl
     async def build_prompt(self, message: ChannelMessage, session_id: str, state: TurnState) -> str | list[dict]:
@@ -222,35 +186,6 @@ class BuiltinImpl:
         return DEFAULT_CONTINUE_PROMPT
 
     @hookimpl
-    def register_cli_commands(self, app: typer.Typer) -> None:
-        from bub.builtin import cli
-
-        app.command("run")(cli.run)
-        app.command("chat")(cli.chat)
-        app.add_typer(cli.login_app)
-        app.command("onboard")(cli.onboard)
-        app.command("hooks", hidden=True)(cli.list_hooks)
-        app.command("gateway")(cli.gateway)
-        app.command("install")(cli.install)
-        app.command("uninstall")(cli.uninstall)
-        app.command("update")(cli.update)
-
-    @hookimpl
-    def onboard_config(self, current_config: dict[str, object]) -> dict[str, object] | None:
-        config = collect_model_config(current_config)
-        available_channels = self._channel_choices()
-        default_channels = self._default_enabled_channels(current_config.get("enabled_channels"), available_channels)
-        enabled_channels = bub_inquirer.ask_checkbox(
-            "Channels",
-            choices=available_channels,
-            enabled=default_channels,
-        )
-
-        stream_output = bub_inquirer.ask_confirm("Stream output", default=bool(current_config.get("stream_output")))
-        config.update(enabled_channels=",".join(enabled_channels), stream_output=stream_output)
-        return config
-
-    @hookimpl
     def provide_model_options(
         self,
         session_id: str,
@@ -282,54 +217,6 @@ class BuiltinImpl:
         return DEFAULT_SYSTEM_PROMPT + "\n\n" + self._read_agents_file(state)
 
     @hookimpl
-    def provide_channels(self, message_handler: MessageHandler) -> list[Channel]:
-        from bub.channels.cli import CliChannel
-        from bub.channels.telegram import TelegramChannel
-
-        return [
-            TelegramChannel(on_receive=message_handler),
-            CliChannel(on_receive=message_handler, agent=self._get_agent()),
-        ]
-
-    @hookimpl
-    async def on_error(self, stage: str, error: Exception, message: Envelope | None) -> None:
-        if message is not None:
-            outbound = ChannelMessage(
-                session_id=field_of(message, "session_id", "unknown"),
-                channel=field_of(message, "channel", "default"),
-                chat_id=field_of(message, "chat_id", "default"),
-                content=f"An error occurred at stage '{stage}': {error}",
-                kind="error",
-            )
-            await self.framework._hook_runtime.call_many("dispatch_outbound", message=outbound)
-
-    @hookimpl
-    async def dispatch_outbound(self, message: Envelope) -> bool:
-        content = content_of(message)
-        session_id = field_of(message, "session_id")
-        if field_of(message, "output_channel") != "cli":
-            logger.info("session.run.outbound session_id={} content={}", session_id, content)
-        return await self.framework.dispatch_via_channel_router(message)
-
-    @hookimpl
-    def render_outbound(
-        self,
-        message: Envelope,
-        session_id: str,
-        state: TurnState,
-        model_output: str,
-    ) -> list[ChannelMessage]:
-        outbound = ChannelMessage(
-            session_id=session_id,
-            channel=field_of(message, "channel", "default"),
-            chat_id=field_of(message, "chat_id", "default"),
-            content=model_output,
-            output_channel=field_of(message, "output_channel", "default"),
-            kind=field_of(message, "kind", "normal"),
-        )
-        return [outbound]
-
-    @hookimpl
     async def provide_lifespan(self) -> AsyncIterator[None]:
         from bub.builtin.shell_manager import shell_manager
 
@@ -353,22 +240,6 @@ class BuiltinImpl:
     @hookimpl
     def build_tape_context(self) -> TapeContext:
         return default_tape_context()
-
-    @hookimpl
-    def provide_steering_inbox(self) -> SteeringInbox:
-        return InMemorySteeringInbox()
-
-    @hookimpl
-    async def admit_message(
-        self,
-        session_id: str,
-        message: Envelope,
-        turn: TurnSnapshot,
-    ) -> AdmitDecision | None:
-        channel_router = self.framework._channel_router
-        if channel_router is None:
-            return None
-        return await channel_router.admit_channel_message(session_id=session_id, message=message, turn=turn)
 
     @hookimpl
     async def before_tool_call(

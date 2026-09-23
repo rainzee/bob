@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 import pluggy
 
-from bub.channels.admission import AdmitDecision, SteeringInbox, TurnSnapshot
-from bub.channels.contracts import MessageHandler
 from bub.envelope import Envelope
 from bub.hooks.interception import (
     LlmCallDecision,
@@ -25,9 +22,6 @@ from bub.store import AsyncTapeStore, TapeStore
 from bub.streaming import AsyncStreamEvents, StreamState
 from bub.tape import Tape, TapeContext
 from bub.turn import TurnState
-
-if TYPE_CHECKING:
-    from bub.channels.base import Channel
 
 BUB_HOOK_NAMESPACE = "bub"
 hookspec = pluggy.HookspecMarker(BUB_HOOK_NAMESPACE)
@@ -108,14 +102,6 @@ class BubHookSpecs:
         raise NotImplementedError
 
     @hookspec
-    def register_cli_commands(self, app: Any) -> None:
-        """Register CLI commands onto the root Typer application."""
-
-    @hookspec
-    def onboard_config(self, current_config: dict[str, Any]) -> dict[str, Any] | None:
-        """Collect a plugin config fragment for the interactive onboarding command."""
-
-    @hookspec
     def provide_model_options(
         self,
         session_id: str,
@@ -193,30 +179,7 @@ class BubHookSpecs:
         """Provide a capability backed by a sibling tape mounted on every session tape."""
         raise NotImplementedError
 
-    @hookspec
-    def provide_channels(self, message_handler: MessageHandler) -> list[Channel]:
-        """Provide a list of channels for receiving messages."""
-        raise NotImplementedError
-
     @hookspec(firstresult=True)
     def build_tape_context(self) -> TapeContext:
         """Build a tape context for the current session, to be used to build context messages."""
-        raise NotImplementedError
-
-    @hookspec(firstresult=True)
-    def admit_message(
-        self,
-        session_id: str,
-        message: Envelope,
-        turn: TurnSnapshot,
-    ) -> AdmitDecision | None:
-        """Decide how to handle an inbound channel message for a session.
-
-        Return ``None`` to keep Bub's default concurrent scheduling behavior.
-        """
-        raise NotImplementedError
-
-    @hookspec(firstresult=True)
-    def provide_steering_inbox(self) -> SteeringInbox | None:
-        """Provide a steering inbox for the current session, to be used to queue and drain messages."""
         raise NotImplementedError

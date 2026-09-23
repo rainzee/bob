@@ -4,8 +4,20 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
+from pydantic import Field
+from pydantic_settings import SettingsConfigDict
 
 import bub.configure as configure
+from bub import Settings
+
+
+@configure.config("demo")
+class DemoSettings(Settings):
+    """Stand-in for a plugin-owned config section"""
+
+    model_config = SettingsConfigDict(env_prefix="BUB_DEMO_", extra="ignore")
+
+    token: str = Field(default="")
 
 
 @pytest.fixture(autouse=True)

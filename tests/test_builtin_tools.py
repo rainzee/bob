@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -461,24 +460,11 @@ async def test_quit_tool_terminates_background_shells_for_current_session(tmp_pa
     )
     other_shell_id = _shell_id(other_started)
 
-    class FakeFramework:
-        def __init__(self) -> None:
-            self.quit_sessions: list[str] = []
-
-        async def quit_via_channel_router(self, session_id: str) -> None:
-            self.quit_sessions.append(session_id)
-
-    framework = FakeFramework()
-    context = _tool_context(
-        tmp_path,
-        session_id="session:target",
-        _runtime_agent=SimpleNamespace(framework=framework),
-    )
+    context = _tool_context(tmp_path, session_id="session:target")
 
     result = await quit_tool.run(context=context)
 
     assert result == "Session tasks stopped."
-    assert framework.quit_sessions == ["session:target"]
     with pytest.raises(KeyError, match="unknown shell id"):
         await bash_output.run(shell_id=target_shell_id)
     assert manager.get(other_shell_id).returncode is None

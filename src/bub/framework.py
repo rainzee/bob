@@ -6,20 +6,16 @@ import contextlib
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import pluggy
-import typer
 from dotenv import find_dotenv, load_dotenv
 from loguru import logger
 
 from bub import configure
-from bub.channels.admission import AdmitDecision, SteeringInbox, TurnSnapshot
-from bub.channels.contracts import ChannelRouter, MessageHandler
 from bub.envelope import Envelope, content_of, field_of, unpack_batch
-from bub.errors import BubError, ErrorKind
 from bub.hooks.interception import AgentHooks
-from bub.hooks.runtime import _SKIP_VALUE, HookRuntime
+from bub.hooks.runtime import HookRuntime
 from bub.hooks.specs import BUB_HOOK_NAMESPACE, BubHookSpecs
 from bub.model_selection import ModelOptions
 from bub.sidecars import TapeSidecar
@@ -28,9 +24,6 @@ from bub.streaming import StreamState
 from bub.tape import Tape, TapeContext
 from bub.turn import TurnResult, TurnState
 from bub.utils import maybe_context_manager
-
-if TYPE_CHECKING:
-    from bub.channels.base import Channel
 
 load_dotenv(find_dotenv(usecwd=True))
 DEFAULT_HOME = Path.home() / ".bub"
@@ -59,9 +52,7 @@ class BubFramework:
         self._hook_runtime = HookRuntime(self._plugin_manager)
         self._agent_hooks = AgentHooks(self._hook_runtime)
         self._plugin_status: dict[str, PluginStatus] = {}
-        self._channel_router: ChannelRouter | None = None
         self._tape_store: TapeStore | AsyncTapeStore | None = None
-        self._steering_inbox: SteeringInbox | None = None
         configure.load(self.config_file)
 
     @property
@@ -112,22 +103,6 @@ class BubFramework:
             else:
                 self._plugin_status[plugin_name] = PluginStatus(is_success=True)
 
-    def create_cli_app(self) -> typer.Typer:
-        """Create CLI app by collecting commands from hooks. Can be used for custom CLI entry point."""
-        app = typer.Typer(name="bub", help="A tiny agent runtime, composable with plugins", add_completion=False)
-
-        @app.callback(invoke_without_command=True)
-        def _main(
-            ctx: typer.Context,
-            workspace: str | None = typer.Option(None, "--workspace", "-w", help="Path to the workspace"),
-        ) -> None:
-            if workspace:
-                self.workspace = Path(workspace).resolve()
-            ctx.obj = self
-
-        self._hook_runtime.call_many_sync("register_cli_commands", app=app)
-        return app
-
     async def build_prompt(
         self, message: Envelope, session_id: str, state: dict[str, Any]
     ) -> str | list[dict[str, Any]]:
@@ -153,7 +128,7 @@ class BubFramework:
         supply their Agent in the message's ``_runtime_agent`` field so builtin
         session recovery reads that agent's store.
         """
-        state = {"_runtime_workspace": str(self.workspace), "_runtime_steering_inbox": self.get_steering_inbox()}
+        state: dict[str, Any] = {"_runtime_workspace": str(self.workspace)}
         for hook_state in reversed(
             await self._hook_runtime.call_many("load_state", message=message, session_id=session_id)
         ):
@@ -161,12 +136,11 @@ class BubFramework:
                 state.update(hook_state)
         return state
 
-    async def process_inbound(self, inbound: Envelope, stream_output: bool = False) -> TurnResult:
+    async def process_inbound(self, inbound: Envelope) -> TurnResult:
         """Resolve, execute, save, render, and dispatch one complete message turn.
 
-        With ``stream_output=True``, consume model events through the bound channel
-        router. This method still returns a completed TurnResult, not an iterator.
-        Use inside ``running()`` when hooks provide stores or other resources.
+        Returns a completed TurnResult; streaming events are consumed internally when
+        the model skill returns a stream.
         """
 
         try:
@@ -177,7 +151,7 @@ class BubFramework:
             prompt = await self.build_prompt(inbound, session_id, state)
             model_output = ""
             try:
-                model_output = await self._run_model(inbound, prompt, session_id, state, stream_output)
+                model_output = await self._run_model(inbound, prompt, session_id, state)
             finally:
                 await self._hook_runtime.call_many(
                     "save_state",
@@ -214,78 +188,21 @@ class BubFramework:
         prompt: str | list[dict],
         session_id: str,
         state: dict[str, Any],
-        stream_output: bool,
     ) -> str:
-        if not stream_output:
-            output = await self._hook_runtime.run_model(prompt=prompt, session_id=session_id, state=state)
-            if output is None:
-                await self._hook_runtime.notify_error(
-                    stage="run_model",
-                    error=RuntimeError("no model skill returned output"),
-                    message=inbound,
-                )
-                return prompt if isinstance(prompt, str) else content_of(inbound)
-            return output
-        stream = await self._hook_runtime.run_model_stream(prompt=prompt, session_id=session_id, state=state)
-        if stream is None:
+        output = await self._hook_runtime.run_model(prompt=prompt, session_id=session_id, state=state)
+        if output is None:
             await self._hook_runtime.notify_error(
                 stage="run_model",
                 error=RuntimeError("no model skill returned output"),
                 message=inbound,
             )
             return prompt if isinstance(prompt, str) else content_of(inbound)
-        else:
-            parts: list[str] = []
-            events = self._channel_router.wrap_stream(inbound, stream) if self._channel_router is not None else stream
-            async with contextlib.aclosing(stream):
-                async for event in events:
-                    if event.kind == "text":
-                        parts.append(str(event.data.get("delta", "")))
-                    elif event.kind == "error":
-                        # Turn "kind" to enum type otherwise BubError's __str__ won't work well.
-                        data = {
-                            **event.data,
-                            "kind": ErrorKind(event.data.get("kind", "unknown")),
-                        }
-                        await self._hook_runtime.notify_error(
-                            stage="run_model", error=BubError(**data), message=inbound
-                        )
-            return "".join(parts)
+        return output
 
     def hook_report(self) -> dict[str, list[str]]:
         """Return hook implementation summary for diagnostics."""
 
         return self._hook_runtime.hook_report()
-
-    def bind_channel_router(self, router: ChannelRouter | None) -> None:
-        """Attach the outbound/stream router, or detach it with ``None``."""
-        self._channel_router = router
-
-    async def dispatch_via_channel_router(self, message: Envelope) -> bool:
-        """Dispatch through the bound router; return False when no router is bound."""
-        if self._channel_router is None:
-            return False
-        return await self._channel_router.dispatch_output(message)
-
-    async def quit_via_channel_router(self, session_id: str) -> None:
-        """Ask the bound router to quit a session; do nothing without a router."""
-        if self._channel_router is not None:
-            await self._channel_router.quit(session_id)
-
-    async def admit_message(self, *, session_id: str, message: Envelope, turn: TurnSnapshot) -> AdmitDecision | None:
-        """Ask admission hooks how to handle a message arriving during a turn.
-
-        Return None when no hook decides; reject unsupported return types.
-        """
-        decision = await self._hook_runtime.call_first(
-            "admit_message",
-            session_id=session_id,
-            message=message,
-            turn=turn,
-        )
-        if decision is None or isinstance(decision, AdmitDecision):
-            return decision
-        raise TypeError("hook.admit_message must return AdmitDecision or None")
 
     async def get_model_options(
         self,
@@ -318,29 +235,6 @@ class BubFramework:
         if workspace is None:
             return self.workspace
         return Path(workspace).expanduser().resolve()
-
-    async def steer_message(
-        self,
-        *,
-        message: Envelope,
-        session_id: str,
-        state: TurnState,
-        reason: str | None = None,
-    ) -> bool:
-        """Enqueue a message for an active turn, returning False without an inbox.
-
-        Set the state's session id if absent and attach the optional reason to
-        message context when the envelope supports attribute assignment.
-        """
-        inbox = self.get_steering_inbox()
-        if inbox is None:
-            return False
-        state.setdefault("session_id", session_id)
-        if reason is not None:
-            with contextlib.suppress(AttributeError):
-                message.context = {**field_of(message, "context", {}), "steering_reason": reason}
-        await inbox.enqueue_message(message, state)
-        return True
 
     @staticmethod
     def _default_session_id(message: Envelope) -> str:
@@ -383,18 +277,9 @@ class BubFramework:
             fallback["chat_id"] = chat_id
         return [fallback]
 
-    def get_channels(self, message_handler: MessageHandler) -> dict[str, Channel]:
-        """Collect channels by name, preferring higher-priority providers on duplicates."""
-        channels: dict[str, Channel] = {}
-        for result in self._hook_runtime.call_many_sync("provide_channels", message_handler=message_handler):
-            for channel in result:
-                if channel.name not in channels:
-                    channels[channel.name] = channel
-        return channels
-
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncGenerator[contextlib.AsyncExitStack, None]:
-        """Acquire hook-provided stores and steering resources for an application lifespan.
+        """Acquire hook-provided stores and resources for an application lifespan.
 
         Yield an AsyncExitStack for additional application resources. Exit closes
         acquired context managers and clears the framework's resource references.
@@ -408,14 +293,10 @@ class BubFramework:
             # Allow plugins to return either TapeStore/AsyncTapeStore instances or context managers for them
             # This benefits plugins that need to initialize and clean up resources with the tape store.
             self._tape_store = await maybe_context_manager(tape_store, stack)
-
-            steering_inbox = self._hook_runtime.call_first_sync("provide_steering_inbox")
-            self._steering_inbox = await maybe_context_manager(steering_inbox, stack)
             try:
                 yield stack
             finally:
                 self._tape_store = None
-                self._steering_inbox = None
 
     def get_tape_store(self) -> TapeStore | AsyncTapeStore | None:
         """Return the store acquired by ``running()``, or None when unavailable."""
@@ -427,10 +308,6 @@ class BubFramework:
         for sidecar in self._hook_runtime.call_many_sync("provide_tape_sidecar"):
             sidecars.setdefault(sidecar.name, sidecar)
         return tuple(sidecars.values())
-
-    def get_steering_inbox(self) -> SteeringInbox | None:
-        """Return the inbox acquired by ``running()``, or None when unavailable."""
-        return self._steering_inbox
 
     def get_agent_hooks(self) -> AgentHooks:
         """Return the model and tool interception adapter for this framework's hooks."""
@@ -454,27 +331,3 @@ class BubFramework:
         if isinstance(context, TapeContext):
             return context
         raise TypeError("hook.build_tape_context must return TapeContext")
-
-    def collect_onboard_config(self) -> dict[str, Any]:
-        """Merge onboarding hook contributions and validate the resulting configuration.
-
-        Each hook receives the accumulated config; higher-priority hooks run last.
-        This method collects settings but does not write the configuration file.
-        """
-        current_config: dict[str, Any] = {}
-
-        for impl in reversed(list(self._hook_runtime._iter_hookimpls("onboard_config"))):
-            result = self._hook_runtime._invoke_impl_sync(
-                hook_name="onboard_config",
-                impl=impl,
-                call_kwargs={"current_config": current_config},
-                kwargs={"current_config": current_config},
-            )
-            if result is _SKIP_VALUE:
-                continue
-            if result is None:
-                continue
-            if not isinstance(result, dict):
-                raise TypeError("hook.onboard_config must return dict or None")
-            configure.merge(current_config, result)
-        return configure.validate(current_config)

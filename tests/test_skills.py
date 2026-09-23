@@ -1,8 +1,9 @@
 from pathlib import Path
 from unittest.mock import patch
 
+from conftest import DemoSettings
+
 import bub.configure as configure
-from bub.channels.telegram import TelegramSettings
 from bub.skills import (
     SKILL_FILE_NAME,
     SkillMetadata,
@@ -50,11 +51,11 @@ def test_skill_metadata_body_strips_frontmatter(tmp_path: Path) -> None:
 
 
 def test_skill_metadata_body_renders_config_templates(tmp_path: Path, load_config) -> None:
-    assert TelegramSettings.__name__ == "TelegramSettings"
+    assert DemoSettings.__name__ == "DemoSettings"
     skill_file = _write_skill(
         tmp_path,
         "demo-skill",
-        body='Token: "${config.telegram.token}"\nSkill dir: $SKILL_DIR',
+        body='Token: "${config.demo.token}"\nSkill dir: $SKILL_DIR',
     )
     metadata = SkillMetadata(
         name="demo-skill",
@@ -66,7 +67,7 @@ def test_skill_metadata_body_renders_config_templates(tmp_path: Path, load_confi
     with patch.dict("os.environ", {}, clear=True):
         load_config(
             """
-telegram:
+demo:
   token: yaml-token
 """.strip(),
         )
@@ -78,8 +79,8 @@ telegram:
 
 
 def test_skill_metadata_body_renders_env_over_config(tmp_path: Path, load_config) -> None:
-    assert TelegramSettings.__name__ == "TelegramSettings"
-    skill_file = _write_skill(tmp_path, "demo-skill", body='Token: "${config.telegram.token}"')
+    assert DemoSettings.__name__ == "DemoSettings"
+    skill_file = _write_skill(tmp_path, "demo-skill", body='Token: "${config.demo.token}"')
     metadata = SkillMetadata(
         name="demo-skill",
         description="Demo",
@@ -88,12 +89,12 @@ def test_skill_metadata_body_renders_env_over_config(tmp_path: Path, load_config
     )
     load_config(
         """
-telegram:
+demo:
   token: yaml-token
 """.strip(),
     )
 
-    with patch.dict("os.environ", {"BUB_TELEGRAM_TOKEN": "env-token"}, clear=True):
+    with patch.dict("os.environ", {"BUB_DEMO_TOKEN": "env-token"}, clear=True):
         configure._global_config.clear()
 
         assert metadata.body() == 'Token: "env-token"'

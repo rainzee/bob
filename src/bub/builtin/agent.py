@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import re
 import shlex
@@ -22,7 +21,6 @@ from bub.builtin.model_runner import (
     is_context_length_error,
 )
 from bub.builtin.settings import load_settings
-from bub.envelope import field_of
 from bub.framework import BubFramework
 from bub.skills import discover_skills, render_skills_prompt
 from bub.store import AsyncTapeStore, AsyncTapeStoreAdapter, InMemoryTapeStore, TapeStore, is_async_tape_store
@@ -385,7 +383,6 @@ class Agent:
             state.error = output.error
             state.usage = output.usage
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            should_continue = should_continue or self._has_steering_messages(tape.context.state)
             if not should_continue:
                 await tape.append_event(
                     "loop.step",
@@ -472,23 +469,12 @@ class Agent:
                     tool.to_schema()["function"] | {"type": "function"} for tool in model_tools_for_call
                 ]
             })
-        steering_inbox = self.framework.get_steering_inbox()
-        steering_envelopes = await steering_inbox.drain_messages(tape.context.state) if steering_inbox else []
-        steering_messages = list(
-            await asyncio.gather(*[
-                self.framework.build_prompt(
-                    message, session_id=field_of(message, "session_id"), state=tape.context.state
-                )
-                for message in steering_envelopes
-            ])
-        )
         return self.model_runner.run(
             tape=tape,
             model=resolved_model,
             tools=model_tools_for_call,
             system_prompt=system_prompt,
             prompt=prompt,
-            steering_messages=steering_messages,
         )
 
     def _system_prompt(
@@ -510,10 +496,6 @@ class Agent:
         if skills_prompt := self._load_skills_prompt(prompt, workspace, allowed_skills):
             blocks.append(skills_prompt)
         return "\n\n".join(blocks)
-
-    def _has_steering_messages(self, state: TurnState) -> bool:
-        steering_inbox = self.framework.get_steering_inbox()
-        return bool(steering_inbox and steering_inbox.message_count(state) > 0)
 
 
 @dataclass(frozen=True)

@@ -29,7 +29,6 @@ from any_llm.types.completion import (
 from loguru import logger
 from pydantic import TypeAdapter, ValidationError
 
-from bub.builtin.codex_provider import OpenaiCodexProvider, should_use_openai_codex_provider
 from bub.builtin.settings import AgentSettings, ModelCandidate
 from bub.channels.message import audio_mime_type_from_format
 from bub.errors import BubError, ErrorKind
@@ -119,13 +118,6 @@ class ModelRunner:
 
     @staticmethod
     def create_llm_client(candidate: ModelCandidate, client_kwargs: dict[str, Any]) -> AnyLLM:
-        if candidate.provider == LLMProvider.OPENAI and should_use_openai_codex_provider(
-            candidate.provider.value,
-            candidate.model_id,
-            api_key=client_kwargs.get("api_key"),
-            api_base=client_kwargs.get("api_base"),
-        ):
-            return OpenaiCodexProvider(**client_kwargs)
         return AnyLLM.create(candidate.provider, **client_kwargs)
 
     async def completion_response(
@@ -180,7 +172,6 @@ class ModelRunner:
         tools: list[Tool],
         system_prompt: str | None,
         prompt: str | list[dict],
-        steering_messages: list[list[dict[str, Any]] | str] | None = None,
     ) -> AsyncStreamEvents:
         state = StreamState()
 
@@ -192,7 +183,6 @@ class ModelRunner:
                 system_prompt=system_prompt,
                 prompt=prompt,
                 model=model,
-                steering_messages=steering_messages,
             )
             output = ModelOutputAccumulator()
             request = LlmCallRequest(
@@ -392,7 +382,6 @@ class ModelRunner:
         system_prompt: str | None,
         prompt: str | list[dict],
         model: str,
-        steering_messages: list[list[dict[str, Any]] | str] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         prompt_message: dict[str, Any] = {"role": "user", "content": prompt}
         try:
@@ -406,10 +395,9 @@ class ModelRunner:
                 model=model,
             )
             raise
-        steering_messages_native = [{"role": "user", "content": message} for message in (steering_messages or [])]
         if system_prompt:
             messages = [{"role": "system", "content": system_prompt}, *messages]
-        new_messages = [*steering_messages_native, prompt_message]
+        new_messages = [prompt_message]
         messages.extend(new_messages)
         return messages, new_messages
 

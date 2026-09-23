@@ -104,38 +104,20 @@ def test_continue_prompt_includes_tape_context(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_state_and_save_state_manage_lifespan_and_context(tmp_path: Path) -> None:
+async def test_load_state_assembles_context_and_agent(tmp_path: Path) -> None:
     _, impl, agent = _build_impl(tmp_path)
-    lifespan = RecordingLifespan()
     message = ChannelMessage(
         session_id="session",
         channel="cli",
         chat_id="room",
         content="hello",
-        lifespan=lifespan,
     )
 
     state = await impl.load_state(message=message, session_id="resolved-session")
 
-    assert lifespan.entered is True
     assert state["session_id"] == "resolved-session"
     assert state["_runtime_agent"] is agent
     assert state["context"] == message.context_str
-
-    try:
-        _raise_value_error()
-    except ValueError as exc:
-        await impl.save_state(
-            session_id="resolved-session",
-            state=state,
-            message=message,
-            model_output="ignored",
-        )
-        assert isinstance(exc, ValueError)
-
-    assert lifespan.exit_args is not None
-    assert lifespan.exit_args[0] is ValueError
-    assert isinstance(lifespan.exit_args[1], ValueError)
 
 
 @pytest.mark.asyncio
@@ -321,104 +303,6 @@ def test_system_prompt_ignores_missing_agents_file(tmp_path: Path) -> None:
     result = impl.system_prompt(prompt="hello", state={"_runtime_workspace": str(tmp_path)})
 
     assert result == DEFAULT_SYSTEM_PROMPT + "\n\n"
-
-
-def test_provide_channels_returns_cli_and_telegram(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _, impl, agent = _build_impl(tmp_path)
-
-    class DummyCliChannel:
-        name = "cli"
-
-        def __init__(self, on_receive, agent) -> None:
-            self.on_receive = on_receive
-            self.agent = agent
-
-    class DummyTelegramChannel:
-        name = "telegram"
-
-        def __init__(self, on_receive) -> None:
-            self.on_receive = on_receive
-
-        @property
-        def enabled(self) -> bool:
-            return True
-
-    import bub.channels.cli
-    import bub.channels.telegram
-
-    monkeypatch.setattr(bub.channels.cli, "CliChannel", DummyCliChannel)
-    monkeypatch.setattr(bub.channels.telegram, "TelegramChannel", DummyTelegramChannel)
-
-    def message_handler(message) -> None:
-        return None
-
-    channels = impl.provide_channels(message_handler)
-
-    assert [channel.name for channel in channels] == ["telegram", "cli"]
-    assert channels[0].on_receive is message_handler
-    assert channels[1].on_receive is message_handler
-    assert channels[1].agent is agent
-
-
-@pytest.mark.asyncio
-async def test_on_error_dispatches_outbound_message(tmp_path: Path) -> None:
-    framework, impl, _ = _build_impl(tmp_path)
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    async def call_many(name: str, **kwargs: object) -> list[object]:
-        calls.append((name, kwargs))
-        return []
-
-    framework._hook_runtime.call_many = call_many  # type: ignore[method-assign]
-
-    await impl.on_error(stage="turn", error=RuntimeError("bad"), message={"channel": "cli", "chat_id": "room"})
-
-    assert len(calls) == 1
-    hook_name, kwargs = calls[0]
-    outbound = kwargs["message"]
-    assert hook_name == "dispatch_outbound"
-    assert outbound.channel == "cli"
-    assert outbound.chat_id == "room"
-    assert outbound.kind == "error"
-    assert outbound.content == "An error occurred at stage 'turn': bad"
-
-
-@pytest.mark.asyncio
-async def test_dispatch_outbound_uses_framework_router(tmp_path: Path) -> None:
-    framework, impl, _ = _build_impl(tmp_path)
-    dispatched: list[object] = []
-
-    async def dispatch_via_channel_router(message: object) -> bool:
-        dispatched.append(message)
-        return True
-
-    framework.dispatch_via_channel_router = dispatch_via_channel_router  # type: ignore[method-assign]
-    outbound = {"session_id": "session", "channel": "cli", "chat_id": "room", "content": "hello"}
-
-    result = await impl.dispatch_outbound(outbound)
-
-    assert result is True
-    assert dispatched == [outbound]
-
-
-def test_render_outbound_preserves_message_metadata(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
-
-    rendered = impl.render_outbound(
-        message={"channel": "telegram", "chat_id": "room", "kind": "command", "output_channel": "cli"},
-        session_id="session",
-        state={},
-        model_output="result",
-    )
-
-    assert len(rendered) == 1
-    outbound = rendered[0]
-    assert outbound.session_id == "session"
-    assert outbound.channel == "telegram"
-    assert outbound.chat_id == "room"
-    assert outbound.output_channel == "cli"
-    assert outbound.kind == "command"
-    assert outbound.content == "result"
 
 
 def test_provide_tape_store_uses_bub_home_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

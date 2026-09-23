@@ -394,10 +394,8 @@ def show_help() -> str:
 @tool(name="quit", context=True, agent_use=False)
 async def quit_tool(*, context: ToolContext) -> str:
     """Abort the tasks of the current session. DO NOT use it in a normal workflow."""
-    agent = _get_agent(context)
     session_id = str(context.state.get("session_id", "temp/unknown"))
     await shell_manager.terminate_session(session_id)
-    await agent.framework.quit_via_channel_router(session_id)
     return "Session tasks stopped."
 
 

@@ -50,7 +50,7 @@ def collector() -> Iterator[tuple[str, Queue[tuple[str, str | None, bytes]]]]:
 
 
 @pytest.mark.parametrize("generic_endpoint", [False, True])
-def test_cli_exports_once_and_flushes_at_exit_without_configuring_logfire(
+def test_otlp_exports_once_and_flushes_at_exit_without_configuring_logfire(
     tmp_path: Path, collector: tuple[str, Queue[tuple[str, str | None, bytes]]], generic_endpoint: bool
 ) -> None:
     pytest.importorskip("opentelemetry.sdk.trace")
@@ -73,9 +73,9 @@ else:
     def unexpected_configuration(*args, **kwargs):
         raise SystemExit('OTLP must not configure Logfire')
     logfire.configure = unexpected_configuration
-from bub.__main__ import _instrument_bub
-from bub.tracing import Span
-_instrument_bub('INFO')  # CLI import already configured it; repeat must not duplicate exports.
+from bub.tracing import Span, configure_otlp
+configure_otlp()
+configure_otlp()  # repeat must not duplicate exports.
 root = Span('invoke_agent bub', {'gen_ai.operation.name': 'invoke_agent'})
 with root.activate():
     child = Span('chat test', {'gen_ai.operation.name': 'chat'})

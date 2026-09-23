@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -70,7 +69,6 @@ class ChannelMessage:
     kind: MessageKind = "normal"
     context: dict[str, Any] = field(default_factory=dict)
     media: list[MediaItem] = field(default_factory=list)
-    lifespan: contextlib.AbstractAsyncContextManager | None = None
     output_channel: str = ""
 
     def __post_init__(self) -> None:
