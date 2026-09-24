@@ -20,19 +20,19 @@ async def test_call_first_respects_priority_and_returns_first_non_none() -> None
 
     class LowPriority:
         @hookimpl
-        def continue_prompt(self, prompt, tape, state):
+        def load_state(self, session_id, state):
             called.append("low")
-            return "low"
+            return {"from": "low"}
 
     class MidPriority:
         @hookimpl
-        def continue_prompt(self, prompt, tape, state):
+        def load_state(self, session_id, state):
             called.append("mid")
-            return "mid"
+            return {"from": "mid"}
 
     class HighPriorityReturnsNone:
         @hookimpl
-        def continue_prompt(self, prompt, tape, state):
+        def load_state(self, session_id, state):
             called.append("high")
             return None
 
@@ -42,8 +42,8 @@ async def test_call_first_respects_priority_and_returns_first_non_none() -> None
         ("high", HighPriorityReturnsNone()),
     )
 
-    result = await runtime.call_first("continue_prompt", prompt="p", tape=None, state=None, ignored="value")
-    assert result == "mid"
+    result = await runtime.call_first("load_state", session_id="x", state={}, ignored="value")
+    assert result == {"from": "mid"}
     assert called == ["high", "mid"]
 
 
@@ -99,17 +99,17 @@ def test_call_many_sync_skips_async_impl() -> None:
 async def test_call_first_swallows_implementation_failures() -> None:
     class RaisingHook:
         @hookimpl
-        def continue_prompt(self, prompt, tape, state):
+        def load_state(self, session_id, state):
             raise RuntimeError("boom")
 
     class WorkingHook:
         @hookimpl
-        def continue_prompt(self, prompt, tape, state):
-            return "ok"
+        def load_state(self, session_id, state):
+            return {"ok": True}
 
     runtime = _runtime_with_plugins(("raise", RaisingHook()), ("working", WorkingHook()))
 
-    assert await runtime.call_first("continue_prompt", prompt="p", tape=None, state=None) == "ok"
+    assert await runtime.call_first("load_state", session_id="s", state={}) == {"ok": True}
 
 
 def test_removed_hooks_are_not_registered() -> None:
@@ -121,7 +121,6 @@ def test_removed_hooks_are_not_registered() -> None:
         "before_llm_call",
         "before_tool_call",
         "build_tape_context",
-        "continue_prompt",
         "load_state",
         "provide_lifespan",
         "provide_tape_sidecar",

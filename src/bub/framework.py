@@ -16,8 +16,7 @@ from bub.hooks.runtime import HookRuntime
 from bub.hooks.specs import BUB_HOOK_NAMESPACE, BubHookSpecs
 from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
-from bub.streaming import StreamState
-from bub.tape import Tape, TapeContext
+from bub.tape import TapeContext
 from bub.turn import TurnState
 from bub.utils import maybe_context_manager
 
@@ -90,13 +89,6 @@ class BubFramework:
                 self._plugin_manager.register(plugin, name=plugin_name)
             except Exception as exc:
                 logger.warning(f"Failed to initialize plugin '{plugin_name}': {exc}")
-
-    async def continue_prompt(self, prompt: str | list[dict], tape: Tape, state: StreamState) -> str:
-        """Build the prompt for the next step of an agent loop."""
-        next_prompt = await self._hook_runtime.call_first("continue_prompt", prompt=prompt, tape=tape, state=state)
-        if isinstance(next_prompt, str):
-            return next_prompt
-        raise TypeError("hook.continue_prompt must return str")
 
     async def build_state(self, session_id: str, state: TurnState | None = None) -> TurnState:
         """Resolve one session's turn state from defaults, seeds, and load-state hooks.

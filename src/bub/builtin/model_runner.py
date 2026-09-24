@@ -179,7 +179,7 @@ class ModelRunner:
         model: str,
         tools: list[Tool],
         system_prompt: str | None,
-        prompt: str | list[dict],
+        prompt: str | list[dict] | None,
     ) -> AsyncStreamEvents:
         state = StreamState()
 
@@ -388,10 +388,9 @@ class ModelRunner:
         tape: Tape,
         run_id: str,
         system_prompt: str | None,
-        prompt: str | list[dict],
+        prompt: str | list[dict] | None,
         model: str,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        prompt_message: dict[str, Any] = {"role": "user", "content": prompt}
         try:
             messages = await tape.read_messages()
         except BubError as exc:
@@ -405,7 +404,9 @@ class ModelRunner:
             raise
         if system_prompt:
             messages = [{"role": "system", "content": system_prompt}, *messages]
-        new_messages = [prompt_message]
+        # ``prompt is None`` continues an agent loop: the tape already ends with the
+        # assistant tool calls and their results, so no new user message is added.
+        new_messages: list[dict[str, Any]] = [] if prompt is None else [{"role": "user", "content": prompt}]
         messages.extend(new_messages)
         return messages, new_messages
 

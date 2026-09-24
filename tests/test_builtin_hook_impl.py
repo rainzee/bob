@@ -8,7 +8,6 @@ import pytest
 from bub.builtin import battery_tools
 from bub.builtin.hook_impl import (
     AGENTS_FILE_NAME,
-    DEFAULT_CONTINUE_PROMPT,
     DEFAULT_SYSTEM_PROMPT,
     BatteryImpl,
     BuiltinImpl,
@@ -16,7 +15,7 @@ from bub.builtin.hook_impl import (
 from bub.configure import Config
 from bub.framework import BubFramework
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
-from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
+from bub.streaming import AsyncStreamEvents, StreamEvent
 from bub.tape import Tape, TapeContext
 
 
@@ -78,15 +77,7 @@ def test_resolve_session_is_gone(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
 
     assert not hasattr(impl, "resolve_session")
-
-
-def test_continue_prompt_includes_tape_context(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
-    tape = _fake_tape(tmp_path).with_context(TapeContext(state={"context": "telegram metadata"}))
-
-    prompt = impl.continue_prompt(prompt="current prompt", tape=tape, state=StreamState())
-
-    assert prompt == f"{DEFAULT_CONTINUE_PROMPT} [context: telegram metadata]"
+    assert not hasattr(impl, "continue_prompt")
 
 
 @pytest.mark.asyncio

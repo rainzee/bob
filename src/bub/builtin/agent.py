@@ -253,16 +253,20 @@ class Agent:
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         display_model = model or self.settings.model
-        next_prompt = prompt
+        prompt_text = prompt if isinstance(prompt, str) else _extract_text_from_parts(prompt)
+        # Only the first step carries the caller's message. Later steps continue on
+        # the tape, which already ends with the assistant tool calls and their results.
+        next_prompt: str | list[dict] | None = prompt
         for step in range(1, self.settings.max_steps + 1):
             start = time.monotonic()
             should_continue = False
             logger.info("loop.step step={} tape={} model={}", step, tape.name, display_model)
-            await tape.append_event("loop.step.start", {"step": step, "prompt": next_prompt})
+            await tape.append_event("loop.step.start", {"step": step})
             try:
                 output = await self._run_once(
                     tape=tape,
                     prompt=next_prompt,
+                    prompt_text=prompt_text,
                     model=model,
                     allowed_skills=allowed_skills,
                     allowed_tools=allowed_tools,
@@ -314,7 +318,7 @@ class Agent:
                 )
                 return
 
-            next_prompt = await self.framework.continue_prompt(prompt=next_prompt, tape=tape, state=state)
+            next_prompt = None
             await tape.append_event(
                 "loop.step",
                 {
@@ -344,12 +348,12 @@ class Agent:
         self,
         *,
         tape: Tape,
-        prompt: str | list[dict],
+        prompt: str | list[dict] | None,
+        prompt_text: str,
         model: str | None = None,
         allowed_tools: Collection[str] | None = None,
         allowed_skills: Collection[str] | None = None,
     ) -> AsyncStreamEvents:
-        prompt_text = prompt if isinstance(prompt, str) else _extract_text_from_parts(prompt)
         if allowed_tools is not None:
             from bub.tools import resolve_tool_names
 
@@ -374,7 +378,7 @@ class Agent:
         self,
         *,
         tape: Tape,
-        prompt: str | list[dict],
+        prompt: str | list[dict] | None,
         prompt_text: str,
         model: str | None,
         allowed_skills: set[str] | None,

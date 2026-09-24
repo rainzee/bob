@@ -81,18 +81,19 @@ From a checkout, `uv sync` is enough; `make install` is a thin wrapper around it
 
 A turn is one call. `Agent.run_stream(session_id, prompt)` resolves the turn
 state through hooks, forks the session tape, then loops on the model until no
-tool calls and no continuation remain:
+tool calls remain:
 
 ```
 build_state → agent loop → model stream
                  ↑              ↓
-          continue_prompt   tool calls
+          (same tape)      tool calls
 ```
 
-Each stage is a hook, so a plugin can contribute state, system prompt, tool
-interception, or a continuation policy without forking the runtime. Builtins are
-registered first and external plugins load after them, so later plugins take
-precedence.
+Each stage is a hook, so a plugin can contribute state, system prompt, or tool
+interception without forking the runtime. A continuation step sends no new user
+message: the tape already ends with the assistant tool calls and their results,
+so the loop just asks the model again. Builtins are registered first and
+external plugins load after them, so later plugins take precedence.
 
 Key source files:
 

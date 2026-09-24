@@ -16,8 +16,7 @@ from bub.hooks.interception import (
 )
 from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
-from bub.streaming import StreamState
-from bub.tape import Tape, TapeContext
+from bub.tape import TapeContext
 from bub.turn import TurnState
 
 BUB_HOOK_NAMESPACE = "bub"
@@ -27,15 +26,6 @@ hookimpl = pluggy.HookimplMarker(BUB_HOOK_NAMESPACE)
 
 class BubHookSpecs:
     """Hook contract for Bub framework extensions."""
-
-    @hookspec(firstresult=True)
-    def continue_prompt(self, prompt: str | list[dict], tape: Tape, state: StreamState) -> str:
-        """Build the prompt used to continue an agent loop.
-
-        Implementations may be synchronous or asynchronous. The first
-        non-``None`` result in hook priority order is used.
-        """
-        raise NotImplementedError
 
     @hookspec
     def load_state(self, session_id: str, state: TurnState) -> TurnState:

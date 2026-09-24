@@ -10,8 +10,7 @@ from bub.hooks import hookimpl
 from bub.hooks.interception import ToolCall, ToolCallDecision, ToolCallResult
 from bub.sidecars import TapeSidecar
 from bub.store import TapeStore
-from bub.streaming import StreamState
-from bub.tape import Tape, TapeContext
+from bub.tape import TapeContext
 from bub.turn import TurnState
 from bub.utils import workspace_from_state
 
@@ -24,7 +23,6 @@ Call tools or skills to finish the task.
 Excessively long context may cause model call failures. In this case, you MAY use tape.info to retrieve the token usage and you SHOULD use tape.handoff tool to shorten the retrieved history.
 </context_contract>
 """
-DEFAULT_CONTINUE_PROMPT = "Continue the task until all targets are completed."
 
 
 class BuiltinImpl:
@@ -82,13 +80,6 @@ class BuiltinImpl:
         if reasoning_effort := await self._recover_session_reasoning_effort(session_id, agent=agent):
             loaded["reasoning_effort"] = reasoning_effort
         return loaded
-
-    @hookimpl
-    def continue_prompt(self, prompt: str | list[dict], tape: Tape, state: StreamState) -> str:
-        del prompt, state
-        if "context" in tape.context.state:
-            return f"{DEFAULT_CONTINUE_PROMPT} [context: {tape.context.state['context']}]"
-        return DEFAULT_CONTINUE_PROMPT
 
     def _read_agents_file(self, state: TurnState) -> str:
         prompt_path = workspace_from_state(state) / AGENTS_FILE_NAME

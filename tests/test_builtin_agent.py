@@ -256,15 +256,15 @@ async def test_agent_run_model_defaults_to_none() -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_awaits_continue_prompt_hook_with_stream_state() -> None:
+async def test_agent_loop_continues_without_injecting_a_user_message() -> None:
     agent = _make_agent()
     tape = _FakeTape(_ForkCapture())
-    prompts: list[str | list[dict]] = []
-    continuation_prompts: list[str | list[dict]] = []
-    observed_usage: list[dict[str, Any] | None] = []
+    prompts: list[str | list[dict] | None] = []
+    prompt_texts: list[str] = []
 
     async def run_once(**kwargs: Any) -> AsyncStreamEvents:
         prompts.append(kwargs["prompt"])
+        prompt_texts.append(kwargs["prompt_text"])
         should_continue = len(prompts) == 1
 
         async def iterator() -> AsyncIterator[StreamEvent]:
@@ -272,13 +272,7 @@ async def test_agent_loop_awaits_continue_prompt_hook_with_stream_state() -> Non
 
         return AsyncStreamEvents(iterator(), state=StreamState(usage={"step": len(prompts)}))
 
-    async def continue_prompt(*, prompt: str | list[dict], tape: _FakeTape, state: StreamState) -> str:
-        continuation_prompts.append(prompt)
-        observed_usage.append(state.usage)
-        return "custom continuation"
-
     agent._run_once = run_once  # type: ignore[method-assign]
-    agent.framework.continue_prompt = continue_prompt
 
     events = [
         event
@@ -290,9 +284,9 @@ async def test_agent_loop_awaits_continue_prompt_hook_with_stream_state() -> Non
     ]
 
     assert [event.kind for event in events] == ["final", "final"]
-    assert prompts == ["initial prompt", "custom continuation"]
-    assert continuation_prompts == ["initial prompt"]
-    assert observed_usage == [{"step": 1}]
+    # The first step carries the caller's message; the continuation asks for no new one.
+    assert prompts == ["initial prompt", None]
+    assert prompt_texts == ["initial prompt", "initial prompt"]
 
 
 @pytest.mark.asyncio
