@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
-from pydantic import ConfigDict, Field
+from pydantic import Field
 
 from bub.builtin.hooks import Battery, BuiltinHooks
-from bub.configure import Config, Settings, config
+from bub.configure import Config, Settings
 from bub.framework import BubFramework
 
 
-@config("demo")
 class DemoSettings(Settings):
     """Stand-in for a settings-owned config section"""
 
-    model_config = ConfigDict(extra="ignore")
+    section: ClassVar[str] = "demo"
 
     token: str = Field(default="")
 

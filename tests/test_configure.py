@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from conftest import DemoSettings
 
 from bub.builtin.settings import AgentSettings
-from bub.configure import Config
+from bub.configure import Config, Settings
 
 MODEL = "test:model"
 
 
-def test_from_file_reads_registered_sections(tmp_path: Path) -> None:
+def test_from_file_reads_explicit_sections(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yml"
     expected_token = "123:abc"  # noqa: S105
     config_file.write_text(
@@ -49,24 +48,48 @@ def test_ensure_caches_within_one_config_and_not_across_instances() -> None:
     assert Config().ensure(DemoSettings) is not config.ensure(DemoSettings)
 
 
-def test_get_value_reads_registered_section_from_data() -> None:
+def test_settings_declare_their_own_section() -> None:
+    assert AgentSettings.section == ""
+    assert DemoSettings.section == "demo"
+
+
+def test_the_module_keeps_no_process_wide_registry() -> None:
+    from bub import configure
+
+    assert not hasattr(configure, "CONFIG_MAP")
+    assert not hasattr(configure, "config")
+
+
+def test_a_locally_declared_settings_class_needs_no_registration() -> None:
+    from typing import ClassVar
+
+    class LocalSettings(Settings):
+        section: ClassVar[str] = "local"
+
+        flag: bool = False
+
+    assert Config({"local": {"flag": True}}).ensure(LocalSettings).flag is True
+    assert Config().ensure(LocalSettings).flag is False
+
+
+def test_get_value_reads_a_section_from_data() -> None:
     config = Config({"demo": {"token": "yaml-token"}})
 
     assert config.get_value("demo.token") == "yaml-token"
 
 
-def test_get_value_descends_into_registered_dict_field() -> None:
+def test_get_value_descends_into_a_nested_dict_field() -> None:
     config = Config({"model": MODEL, "api_key": {"openai": "sk-yaml"}})
 
     assert config.get_value("api_key") == {"openai": "sk-yaml"}
     assert config.get_value("api_key.openai") == "sk-yaml"
 
 
-def test_get_value_ignores_raw_unregistered_path() -> None:
+def test_get_value_walks_raw_paths_without_a_registry() -> None:
     config = Config({"model": MODEL, "custom": {"nested": {"value": "raw-value"}}})
 
-    with pytest.raises(KeyError):
-        config.get_value("custom.nested.value")
+    assert config.get_value("custom.nested.value") == "raw-value"
+    assert config.get_value("custom.missing", default=None) is None
 
 
 def test_get_value_returns_default_for_missing_path() -> None:

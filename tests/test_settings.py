@@ -94,7 +94,7 @@ def test_max_tokens_falls_back_to_the_default() -> None:
     assert _settings().max_tokens == DEFAULT_MAX_TOKENS
 
 
-def test_spill_sidecar_settings_load_from_the_plugin_section(write_config) -> None:
+def test_spill_sidecar_settings_load_from_the_spill_section(write_config) -> None:
     config = Config.from_file(write_config("spill:\n  threshold: 64"))
 
     assert config.ensure(SpillSettings).threshold == 64

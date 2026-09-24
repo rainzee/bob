@@ -5,11 +5,11 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from loguru import logger
-from pydantic import ConfigDict, Field
+from pydantic import Field
 
-from bub import config
 from bub.configure import Settings
 from bub.errors import BubError, ErrorKind
 from bub.hooks import ToolCall, ToolCallResult
@@ -59,11 +59,10 @@ async def spill_tool_result(call: ToolCall, result: ToolCallResult, state: TurnS
         result.result = bounded_result
 
 
-@config(name="spill")
 class SpillSettings(Settings):
-    """Configuration owned by the builtin spill sidecar."""
+    """溢出 sidecar 的配置"""
 
-    model_config = ConfigDict(extra="ignore")
+    section: ClassVar[str] = "spill"
 
     threshold: int = Field(
         default=4096,

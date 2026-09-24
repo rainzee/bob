@@ -4,12 +4,12 @@
 
 Core code lives under `src/`:
 
-- `src/bub/framework.py`: turn orchestration, hook loading, and resource lifecycle.
-- `src/bub/hooks/`: hook specifications, execution helpers, and interception contracts.
-- `src/bub/configure.py`: `Settings`, the `@config()` section registry, and the per-instance `Config`.
+- `src/bub/framework.py`: the composition root: paths, config, resource slots and `running()`.
+- `src/bub/hooks.py`: the interception contracts, the `Hooks` value, and its per-slot execution semantics.
+- `src/bub/configure.py`: `Settings` (each class declares its own `section`), and the per-instance `Config`.
 - `src/bub/{streaming,errors}.py`: small kernel vocabulary owned by each concern.
 - `src/bub/builtin/`: builtin runtime, settings, tools, tape services, and provider adapters.
-- `src/bub/builtin/hook_impl.py`: `BuiltinImpl` (turn pipeline) and `BatteryImpl` (opt-in tape store, spill, shells).
+- `src/bub/builtin/hooks.py`: `BuiltinHooks` (turn pipeline) and `Battery` (opt-in tape store, spill, shells).
 - `src/bub/skills.py` / `src/bub/tools.py`: skill discovery over explicit roots, and the tool framework.
 
 Everything is instance-scoped: no environment variables, no process-wide registries, no implicit user or working directories. The framework takes `workspace`, `home`, and an optional `Config`; the agent takes its tools and skill roots.

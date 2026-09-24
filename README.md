@@ -155,8 +155,8 @@ the shell manager, or the spill sidecar without the store.
 
 Configuration is a mapping passed to `Config`, either directly or through
 `Config.from_file(path)`. Nothing is read from the environment. The root section
-is `AgentSettings`; other sections belong to settings classes registered with
-`@config`.
+is `AgentSettings`; other sections belong to `Settings` subclasses that declare
+their own `section`:
 
 | Key                     | Default    | Description                                             |
 | ----------------------- | ---------- | ------------------------------------------------------- |
@@ -177,6 +177,21 @@ api_key:
 max_tokens: 8192
 spill:
   threshold: 4096
+```
+
+```python
+from typing import ClassVar
+
+from bub import Config, Settings
+
+
+class SpillSettings(Settings):
+    section: ClassVar[str] = "spill"
+
+    threshold: int = 4096
+
+
+spill = Config.from_file(path).ensure(SpillSettings)
 ```
 
 ## Background

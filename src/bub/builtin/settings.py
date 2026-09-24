@@ -6,9 +6,9 @@ from typing import Any
 
 from any_llm import AnyLLM
 from any_llm.constants import LLMProvider
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
 
-from bub.configure import Settings, config
+from bub.configure import Settings
 
 DEFAULT_MAX_TOKENS = 16384
 
@@ -20,11 +20,9 @@ class ModelCandidate:
     name: str
 
 
-@config()
 class AgentSettings(Settings):
     """Configuration settings for the Agent."""
 
-    model_config = ConfigDict(extra="ignore")
     model: str
     fallback_models: list[str] | None = None
     api_key: str | dict[str, str] | None = None
@@ -34,7 +32,6 @@ class AgentSettings(Settings):
     model_timeout_seconds: int | None = None
     client_args: dict[str, Any] = Field(default_factory=dict)
     completion_args: dict[str, Any] = Field(default_factory=dict)
-    verbose: int = Field(default=0, description="Verbosity level for logging. Higher means more verbose.", ge=0, le=2)
 
     @field_validator("client_args", "completion_args", mode="before")
     @classmethod

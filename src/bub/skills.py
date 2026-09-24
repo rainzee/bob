@@ -67,10 +67,7 @@ def _render_config_templates(content: str, config: Config | None) -> str:
     def replace(match: re.Match[str]) -> str:
         if config is None:
             return match.group(0)
-        try:
-            value = config.get_value(match.group(1), default="")
-        except KeyError:
-            return match.group(0)
+        value = config.get_value(match.group(1), default="")
         if isinstance(value, str):
             return value
         if isinstance(value, bool):
