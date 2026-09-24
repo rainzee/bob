@@ -12,7 +12,6 @@ from bub.builtin.settings import AgentSettings
 from bub.configure import Config
 from bub.framework import BubFramework
 from bub.hooks import hookimpl
-from bub.message import Message
 from bub.streaming import StreamState
 
 
@@ -175,36 +174,37 @@ def test_load_hooks_initializes_callable_plugins_after_config_load(
 
 
 @pytest.mark.asyncio
-async def test_process_inbound_runs_model_and_saves_state(tmp_path: Path) -> None:
+async def test_build_state_merges_defaults_seeds_and_load_state_hooks(tmp_path: Path) -> None:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
-    saved_outputs: list[str] = []
 
-    class RuntimePlugin:
+    class LowPriority:
         @hookimpl
-        def resolve_session(self, message) -> str:
-            return "session"
+        def load_state(self, session_id: str, state: dict[str, str]) -> dict[str, str]:
+            assert state["_runtime_workspace"] == str(tmp_path)
+            assert state["seed"] == "kept"
+            return {"session_id": session_id, "from": "low"}
 
+    class HighPriority:
         @hookimpl
-        def load_state(self, message, session_id) -> dict[str, str]:
-            return {}
+        def load_state(self, session_id: str, state: dict[str, str]) -> dict[str, str]:
+            return {"from": "high"}
 
-        @hookimpl
-        def build_prompt(self, message, session_id, state) -> str:
-            return "prompt"
+    framework.plugin_manager.register(LowPriority(), name="low")
+    framework.plugin_manager.register(HighPriority(), name="high")
 
-        @hookimpl
-        async def run_model(self, prompt, session_id, state) -> str:
-            return "plain-text"
+    state = await framework.build_state("session-1", {"seed": "kept"})
 
-        @hookimpl
-        async def save_state(self, session_id, state, message, model_output) -> None:
-            saved_outputs.append(model_output)
+    assert state == {
+        "_runtime_workspace": str(tmp_path),
+        "seed": "kept",
+        "session_id": "session-1",
+        "from": "high",
+    }
 
-    framework.plugin_manager.register(RuntimePlugin(), name="runtime")
 
-    result = await framework.process_inbound(Message(session_id="s", channel="cli", chat_id="room", content="hi"))
+def test_process_inbound_is_gone(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
-    assert result.model_output == "plain-text"
-    assert result.session_id == "session"
-    assert result.prompt == "prompt"
-    assert saved_outputs == ["plain-text"]
+    assert not hasattr(framework, "process_inbound")
+    assert not hasattr(framework, "build_prompt")
+    assert not hasattr(framework, "resolve_session")

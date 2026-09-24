@@ -3,16 +3,10 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator
-from contextlib import aclosing
 from typing import Any
 
 import pluggy
 from loguru import logger
-
-from bub.envelope import Envelope
-from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
-from bub.turn import TurnState
 
 
 class HookRuntime:
@@ -73,22 +67,6 @@ class HookRuntime:
             results.append(value)
         return results
 
-    async def notify_error(self, *, stage: str, error: Exception, message: Envelope | None) -> None:
-        """Call on-error hooks, swallowing observer failures."""
-
-        for impl in self._iter_hookimpls("on_error"):
-            call_kwargs = self._kwargs_for_impl(impl, {"stage": stage, "error": error, "message": message})
-            try:
-                value = impl.function(**call_kwargs)
-                if inspect.isawaitable(value):
-                    await value
-            except Exception:
-                logger.opt(exception=True).warning(
-                    "hook.on_error_failed stage={} adapter={}",
-                    stage,
-                    impl.plugin_name or "<unknown>",
-                )
-
     async def _invoke_impl_async(
         self,
         *,
@@ -129,45 +107,6 @@ class HookRuntime:
     @staticmethod
     def _kwargs_for_impl(impl: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
         return {name: kwargs[name] for name in impl.argnames if name in kwargs}
-
-    async def run_model(self, prompt: str | list[dict], session_id: str, state: TurnState) -> str | None:
-        """Run the first model hook found and return its text."""
-
-        for _, plugin in reversed(self._plugin_manager.list_name_plugin()):
-            if hasattr(plugin, "run_model"):
-                output = await self.call_first("run_model", prompt=prompt, session_id=session_id, state=state)
-                if output is None or isinstance(output, str):
-                    return output
-                raise TypeError("hook.run_model must return str or None")
-            if hasattr(plugin, "run_model_stream"):
-                stream = await self.call_first("run_model_stream", prompt=prompt, session_id=session_id, state=state)
-                text = ""
-                async with aclosing(stream):
-                    async for event in stream:
-                        if event.kind == "text":
-                            text += str(event.data.get("delta", ""))
-                return text
-        return None
-
-    async def run_model_stream(
-        self, prompt: str | list[dict], session_id: str, state: TurnState
-    ) -> AsyncStreamEvents | None:
-        """Run the first streaming model hook, falling back to a text hook."""
-
-        for _, plugin in reversed(self._plugin_manager.list_name_plugin()):
-            if hasattr(plugin, "run_model_stream"):
-                stream = await self.call_first("run_model_stream", prompt=prompt, session_id=session_id, state=state)
-                if stream is None or isinstance(stream, AsyncStreamEvents):
-                    return stream
-                raise TypeError("hook.run_model_stream must return AsyncStreamEvents or None")
-            if hasattr(plugin, "run_model"):
-
-                async def iterator() -> AsyncGenerator[StreamEvent, None]:
-                    result = await self.call_first("run_model", prompt=prompt, session_id=session_id, state=state)
-                    yield StreamEvent("text", {"delta": result})
-
-                return AsyncStreamEvents(iterator(), state=StreamState())
-        return None
 
 
 _SKIP_VALUE = object()

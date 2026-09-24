@@ -36,7 +36,6 @@ from bub.hooks.interception import (
     LlmCallRequest,
     LlmCallResult,
 )
-from bub.message import audio_mime_type_from_format
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape
 from bub.tools import Tool, ToolContext, ToolExecutor
@@ -45,6 +44,20 @@ from bub.tracing import Span, current_span, event
 TOOL_ARGUMENTS_ADAPTER = TypeAdapter(dict[str, Any])
 CompletionResult = ChatCompletion | ParsedChatCompletion[Any] | AsyncIterator[ChatCompletionChunk]
 GOOGLE_FILE_CONTENT_PROVIDERS = frozenset({LLMProvider.GEMINI, LLMProvider.VERTEXAI})
+
+_AUDIO_FORMAT_TO_MIME_TYPE = {
+    "aiff": "audio/aiff",
+    "flac": "audio/flac",
+    "m4a": "audio/mp4",
+    "mp3": "audio/mpeg",
+    "ogg": "audio/ogg",
+    "wav": "audio/wav",
+    "webm": "audio/webm",
+}
+
+
+def _audio_mime_type(audio_format: str) -> str:
+    return _AUDIO_FORMAT_TO_MIME_TYPE.get(audio_format, f"audio/{audio_format}")
 
 
 def _extra_options(llm: AnyLLM, *, stream: bool) -> dict[str, Any]:
@@ -87,7 +100,7 @@ def _adapt_messages_for_provider(messages: list[dict[str, Any]], provider: LLMPr
                 data = input_audio.get("data") if isinstance(input_audio, dict) else None
                 audio_format = input_audio.get("format") if isinstance(input_audio, dict) else None
                 if isinstance(data, str) and data and isinstance(audio_format, str) and audio_format:
-                    mime_type = audio_mime_type_from_format(audio_format)
+                    mime_type = _audio_mime_type(audio_format)
                     file_data = f"data:{mime_type};base64,{data}"
                     adapted_content.append({"type": "file", "file": {"file_data": file_data}})
                     changed = True

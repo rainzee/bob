@@ -73,24 +73,32 @@ From a checkout, `uv sync` is enough; `make install` is a thin wrapper around it
 
 - **Composable by design.** Every turn stage is a plugin hook. Override one stage or replace the whole flow without forking the runtime.
 - **Tape context.** Context is rebuilt from append-only records, not carried around as mutable session state. Easier to inspect, replay, and hand off.
-- **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel, REPL, or transport is baked in.
+- **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel, REPL, transport, or message envelope is baked in.
 - **Batteries optional.** Tools, skills, tape stores, and model execution ship with the runtime, but the batteries are opt-in and the tool set is passed to each agent explicitly.
 - **Operator equivalence.** Humans and agents work inside the same runtime boundaries, with the same evidence trail and handoff model. No hidden operator class.
 
 ## How It Works
 
-Every inbound message goes through one turn pipeline. Each stage is a hook.
+A turn is one call. `Agent.run_stream(session_id, prompt)` resolves the turn
+state through hooks, forks the session tape, then loops on the model until no
+tool calls and no continuation remain:
 
 ```
-resolve_session → load_state → build_prompt → run_model → save_state
+build_state → agent loop → model stream
+                 ↑              ↓
+          continue_prompt   tool calls
 ```
 
-Builtins are registered first. External plugins load after them. At runtime, later plugins take precedence. There are no framework-only shortcuts.
+Each stage is a hook, so a plugin can contribute state, system prompt, tool
+interception, or a continuation policy without forking the runtime. Builtins are
+registered first and external plugins load after them, so later plugins take
+precedence.
 
 Key source files:
 
-- Turn orchestrator: [`src/bub/framework.py`](https://github.com/bubbuild/bub/blob/main/src/bub/framework.py)
+- Composition root: [`src/bub/framework.py`](https://github.com/bubbuild/bub/blob/main/src/bub/framework.py)
 - Hook contract: [`src/bub/hooks/specs.py`](https://github.com/bubbuild/bub/blob/main/src/bub/hooks/specs.py)
+- Agent loop: [`src/bub/builtin/agent.py`](https://github.com/bubbuild/bub/blob/main/src/bub/builtin/agent.py)
 - Builtin hooks: [`src/bub/builtin/hook_impl.py`](https://github.com/bubbuild/bub/blob/main/src/bub/builtin/hook_impl.py)
 - Skill discovery: [`src/bub/skills.py`](https://github.com/bubbuild/bub/blob/main/src/bub/skills.py)
 
@@ -98,25 +106,24 @@ Key source files:
 
 ```python
 from bub import hookimpl
-from bub.envelope import content_of
 
 
-class EchoPlugin:
+class AuditPlugin:
     @hookimpl
-    def build_prompt(self, message, session_id, state):
-        return f"[echo] {content_of(message)}"
+    def system_prompt(self, prompt, state):
+        return "Answer in one paragraph."
 
     @hookimpl
-    async def run_model(self, prompt, session_id, state):
-        return prompt
+    async def after_tool_call(self, call, result, state):
+        print("tool ran:", call.tool)
 
 
-echo_plugin = EchoPlugin()
+audit_plugin = AuditPlugin()
 ```
 
 ```toml
 [project.entry-points."bub"]
-echo = "my_package.plugin:echo_plugin"
+audit = "my_package.plugin:audit_plugin"
 ```
 
 See the [Build docs](https://bub.build/docs/build/) for hook guides, packaging, and plugin structure.

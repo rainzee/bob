@@ -5,13 +5,12 @@ from __future__ import annotations
 import contextlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pluggy
 from loguru import logger
 
 from bub.configure import Config
-from bub.envelope import Envelope, content_of, field_of
 from bub.hooks.interception import AgentHooks
 from bub.hooks.runtime import HookRuntime
 from bub.hooks.specs import BUB_HOOK_NAMESPACE, BubHookSpecs
@@ -19,7 +18,7 @@ from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
 from bub.streaming import StreamState
 from bub.tape import Tape, TapeContext
-from bub.turn import TurnResult, TurnState
+from bub.turn import TurnState
 from bub.utils import maybe_context_manager
 
 
@@ -92,17 +91,6 @@ class BubFramework:
             except Exception as exc:
                 logger.warning(f"Failed to initialize plugin '{plugin_name}': {exc}")
 
-    async def build_prompt(
-        self, message: Envelope, session_id: str, state: dict[str, Any]
-    ) -> str | list[dict[str, Any]]:
-        """Build prompt for one message turn."""
-        prompt = await self._hook_runtime.call_first(
-            "build_prompt", message=message, session_id=session_id, state=state
-        )
-        if not prompt:
-            prompt = content_of(message)
-        return cast("str | list[dict[str, Any]]", prompt)
-
     async def continue_prompt(self, prompt: str | list[dict], tape: Tape, state: StreamState) -> str:
         """Build the prompt for the next step of an agent loop."""
         next_prompt = await self._hook_runtime.call_first("continue_prompt", prompt=prompt, tape=tape, state=state)
@@ -110,84 +98,23 @@ class BubFramework:
             return next_prompt
         raise TypeError("hook.continue_prompt must return str")
 
-    async def build_state(self, message: Envelope, session_id: str) -> TurnState:
-        """Merge runtime defaults and load-state hooks into a fresh turn state.
+    async def build_state(self, session_id: str, state: TurnState | None = None) -> TurnState:
+        """Resolve one session's turn state from defaults, seeds, and load-state hooks.
 
-        Higher-priority hooks override lower-priority values. SDK callers can
-        supply their Agent in the message's ``_runtime_agent`` field so builtin
-        session recovery reads that agent's store.
+        Args:
+            session_id: Session identity within the workspace.
+            state: Values the caller already knows, for example ``_runtime_agent``.
+
+        Hooks receive the accumulated state and may return a partial update;
+        higher-priority hooks override lower-priority values.
         """
-        state: dict[str, Any] = {"_runtime_workspace": str(self.workspace)}
+        resolved: TurnState = {"_runtime_workspace": str(self.workspace), **(state or {})}
         for hook_state in reversed(
-            await self._hook_runtime.call_many("load_state", message=message, session_id=session_id)
+            await self._hook_runtime.call_many("load_state", session_id=session_id, state=resolved)
         ):
             if isinstance(hook_state, dict):
-                state.update(hook_state)
-        return state
-
-    async def process_inbound(self, inbound: Envelope) -> TurnResult:
-        """Resolve, execute, and save one complete message turn."""
-
-        try:
-            session_id = await self.resolve_session(inbound)
-            if isinstance(inbound, dict):
-                inbound.setdefault("session_id", session_id)
-            state = await self.build_state(inbound, session_id)
-            prompt = await self.build_prompt(inbound, session_id, state)
-            model_output = ""
-            try:
-                model_output = await self._run_model(inbound, prompt, session_id, state)
-            finally:
-                await self._hook_runtime.call_many(
-                    "save_state",
-                    session_id=session_id,
-                    state=state,
-                    message=inbound,
-                    model_output=model_output,
-                )
-
-            return TurnResult(
-                session_id=session_id,
-                prompt=prompt,
-                model_output=model_output,
-                state=state,
-            )
-        except Exception as exc:
-            logger.exception("Error processing inbound message")
-            await self._hook_runtime.notify_error(stage="turn", error=exc, message=inbound)
-            raise
-
-    async def resolve_session(self, message: Envelope) -> str:
-        """Resolve the canonical session id for a message."""
-
-        resolved = await self._hook_runtime.call_first("resolve_session", message=message)
-        return str(resolved or self._default_session_id(message))
-
-    async def _run_model(
-        self,
-        inbound: Envelope,
-        prompt: str | list[dict],
-        session_id: str,
-        state: dict[str, Any],
-    ) -> str:
-        output = await self._hook_runtime.run_model(prompt=prompt, session_id=session_id, state=state)
-        if output is None:
-            await self._hook_runtime.notify_error(
-                stage="run_model",
-                error=RuntimeError("no model skill returned output"),
-                message=inbound,
-            )
-            return prompt if isinstance(prompt, str) else content_of(inbound)
-        return output
-
-    @staticmethod
-    def _default_session_id(message: Envelope) -> str:
-        session_id = field_of(message, "session_id")
-        if session_id is not None:
-            return str(session_id)
-        channel = str(field_of(message, "channel", "default"))
-        chat_id = str(field_of(message, "chat_id", "default"))
-        return f"{channel}:{chat_id}"
+                resolved.update(hook_state)
+        return resolved
 
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncGenerator[contextlib.AsyncExitStack, None]:
@@ -225,7 +152,7 @@ class BubFramework:
         """Return the model and tool interception adapter for this framework's hooks."""
         return self._agent_hooks
 
-    def get_system_prompt(self, prompt: str | list[dict], state: dict[str, Any]) -> str:
+    def get_system_prompt(self, prompt: str | list[dict], state: TurnState) -> str:
         """Join nonempty system-prompt hook results from low to high priority.
 
         Hooks contribute additional blocks; a higher-priority hook does not replace

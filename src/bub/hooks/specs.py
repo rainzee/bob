@@ -6,7 +6,6 @@ from collections.abc import AsyncIterator, Iterator
 
 import pluggy
 
-from bub.envelope import Envelope
 from bub.hooks.interception import (
     LlmCallDecision,
     LlmCallRequest,
@@ -17,7 +16,7 @@ from bub.hooks.interception import (
 )
 from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
-from bub.streaming import AsyncStreamEvents, StreamState
+from bub.streaming import StreamState
 from bub.tape import Tape, TapeContext
 from bub.turn import TurnState
 
@@ -30,36 +29,6 @@ class BubHookSpecs:
     """Hook contract for Bub framework extensions."""
 
     @hookspec(firstresult=True)
-    def resolve_session(self, message: Envelope) -> str:
-        """Resolve session id for one inbound message."""
-        raise NotImplementedError
-
-    @hookspec(firstresult=True)
-    def build_prompt(self, message: Envelope, session_id: str, state: TurnState) -> str | list[dict]:
-        """Build model prompt for this turn.
-
-        Returns either a plain text string or a list of content parts
-        (OpenAI multimodal format) when media attachments are present.
-        """
-        raise NotImplementedError
-
-    @hookspec(firstresult=True)
-    def run_model(self, prompt: str | list[dict], session_id: str, state: TurnState) -> str:
-        """Run model for one turn and return plain text output. Should not be implemented if `run_model_stream` is implemented."""
-        raise NotImplementedError
-
-    @hookspec(firstresult=True)
-    def run_model_stream(self, prompt: str | list[dict], session_id: str, state: TurnState) -> AsyncStreamEvents:
-        """Run model for one turn and return a stream of events. Should not be implemented if `run_model` is implemented.
-
-        Implementations may honor a runtime model override by reading
-        ``state["model"]`` (any ``provider:model`` string). The value takes
-        effect on the turn in which it is read, so a model switched mid-turn via
-        the `,model <id>` command applies from the *next* turn.
-        """
-        raise NotImplementedError
-
-    @hookspec(firstresult=True)
     def continue_prompt(self, prompt: str | list[dict], tape: Tape, state: StreamState) -> str:
         """Build the prompt used to continue an agent loop.
 
@@ -69,23 +38,13 @@ class BubHookSpecs:
         raise NotImplementedError
 
     @hookspec
-    def load_state(self, message: Envelope, session_id: str) -> TurnState:
-        """Load state snapshot for one session."""
+    def load_state(self, session_id: str, state: TurnState) -> TurnState:
+        """Load a partial state snapshot for one session.
+
+        The framework passes the state it has accumulated so far, so an
+        implementation may read values a higher-priority hook contributed.
+        """
         raise NotImplementedError
-
-    @hookspec
-    def save_state(
-        self,
-        session_id: str,
-        state: TurnState,
-        message: Envelope,
-        model_output: str,
-    ) -> None:
-        """Persist state updates after one model turn."""
-
-    @hookspec
-    def on_error(self, stage: str, error: Exception, message: Envelope | None) -> None:
-        """Observe framework errors from any stage."""
 
     @hookspec
     def before_llm_call(self, request: LlmCallRequest, state: TurnState) -> LlmCallRequest | LlmCallDecision | None:

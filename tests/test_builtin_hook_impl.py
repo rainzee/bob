@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +15,6 @@ from bub.builtin.hook_impl import (
 )
 from bub.configure import Config
 from bub.framework import BubFramework
-from bub.message import Message
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape, TapeContext
@@ -77,20 +74,10 @@ def _build_impl(tmp_path: Path, config: Config | None = None) -> tuple[BubFramew
     return framework, impl, agent
 
 
-def test_resolve_session_prefers_explicit_session_id(tmp_path: Path) -> None:
+def test_resolve_session_is_gone(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
 
-    message = Message(session_id="  keep-me  ", channel="cli", chat_id="room", content="hello")
-
-    assert impl.resolve_session(message) == "  keep-me  "
-
-
-def test_resolve_session_falls_back_to_channel_and_chat_id(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
-
-    message = {"session_id": "   ", "channel": "telegram", "chat_id": "42", "content": "hello"}
-
-    assert impl.resolve_session(message) == "telegram:42"
+    assert not hasattr(impl, "resolve_session")
 
 
 def test_continue_prompt_includes_tape_context(tmp_path: Path) -> None:
@@ -103,21 +90,13 @@ def test_continue_prompt_includes_tape_context(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_state_assembles_context_and_agent(tmp_path: Path) -> None:
+async def test_load_state_uses_the_seeded_agent_and_defaults(tmp_path: Path) -> None:
     _, impl, agent = _build_impl(tmp_path)
-    message = Message(
-        session_id="session",
-        channel="cli",
-        chat_id="room",
-        content="hello",
-        context={"tenant": "acme"},
-    )
 
-    state = await impl.load_state(message=message, session_id="resolved-session")
+    state = await impl.load_state(session_id="resolved-session", state={"_runtime_agent": agent})
 
     assert state["session_id"] == "resolved-session"
     assert state["_runtime_agent"] is agent
-    assert state["context"] == message.context_str == "tenant=acme"
 
 
 @pytest.mark.asyncio
@@ -127,9 +106,7 @@ async def test_load_state_injects_model_recorded_on_session_tape(tmp_path: Path)
     session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
     await session.append_event("model_switch", {"model": "openai:gpt-4o"})
 
-    message = Message(session_id="session", channel="cli", chat_id="room", content="hello")
-
-    state = await impl.load_state(message=message, session_id="resolved-session")
+    state = await impl.load_state(session_id="resolved-session", state={})
 
     assert state["model"] == "openai:gpt-4o"
 
@@ -140,9 +117,7 @@ async def test_load_state_injects_reasoning_effort_recorded_on_session_tape(tmp_
     session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
     await session.append_event("reasoning_effort_switch", {"reasoning_effort": "high"})
 
-    message = Message(session_id="session", channel="cli", chat_id="room", content="hello")
-
-    state = await impl.load_state(message=message, session_id="resolved-session")
+    state = await impl.load_state(session_id="resolved-session", state={})
 
     assert state["reasoning_effort"] == "high"
 
@@ -152,9 +127,7 @@ async def test_load_state_does_not_inject_model_for_unknown_session(tmp_path: Pa
     """A session with nothing recorded on its tape must not inherit any model (no leakage)."""
     _, impl, _ = _build_impl(tmp_path)
 
-    message = Message(session_id="session", channel="cli", chat_id="room", content="hello")
-
-    state = await impl.load_state(message=message, session_id="fresh-session")
+    state = await impl.load_state(session_id="fresh-session", state={})
 
     assert "model" not in state
 
@@ -168,102 +141,6 @@ async def test_recover_session_model_returns_latest_recorded(tmp_path: Path) -> 
     await session.append_event("model_switch", {"model": "anthropic:claude-3"})
 
     assert await impl._recover_session_model("resolved-session", agent=agent) == "anthropic:claude-3"
-
-
-@pytest.mark.asyncio
-async def test_build_prompt_prefixes_context(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
-    normal = Message(session_id="s", channel="cli", chat_id="room", content="hello", context={"tenant": "acme"})
-    plain = Message(session_id="s", channel="cli", chat_id="room", content="hello")
-
-    normal_prompt = await impl.build_prompt(normal, session_id="s", state={})
-    plain_prompt = await impl.build_prompt(plain, session_id="s", state={})
-
-    prompt_lines = normal_prompt.splitlines()
-    assert prompt_lines[0] == normal.context_str
-    assert prompt_lines[2] == "hello"
-    assert plain_prompt.splitlines()[-1] == "hello"
-
-
-@pytest.mark.asyncio
-async def test_build_prompt_uses_system_timezone_for_context_date(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    if not hasattr(time, "tzset"):
-        pytest.skip("time.tzset is not available on this platform")
-
-    original_tz = os.environ.get("TZ")
-    monkeypatch.setenv("TZ", "Asia/Shanghai")
-    time.tzset()
-    try:
-        _, impl, _ = _build_impl(tmp_path)
-        message = Message(session_id="s", channel="cli", chat_id="room", content="hello")
-
-        prompt = await impl.build_prompt(message, session_id="s", state={})
-
-        date_line = prompt.splitlines()[1]
-        assert date_line.startswith("---Date: ")
-        assert date_line.endswith("+08:00---")
-    finally:
-        if original_tz is None:
-            monkeypatch.delenv("TZ", raising=False)
-        else:
-            monkeypatch.setenv("TZ", original_tz)
-        time.tzset()
-
-
-@pytest.mark.asyncio
-async def test_run_model_stream_delegates_to_agent(tmp_path: Path) -> None:
-    _, impl, agent = _build_impl(tmp_path)
-    state = {"context": "ctx"}
-
-    stream = await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
-    events = [event async for event in stream]
-
-    assert [(event.kind, event.data) for event in events] == [("text", {"delta": "agent-output"})]
-    assert agent.run_stream_calls == [("session", "prompt", state, None)]
-    assert agent.run_calls == []
-
-
-@pytest.mark.asyncio
-async def test_runtime_model_override_is_passed_to_agent(tmp_path: Path) -> None:
-    _, impl, agent = _build_impl(tmp_path)
-    message = Message(
-        session_id="session",
-        channel="cli",
-        chat_id="room",
-        content="hello",
-        context={"model": "anthropic:claude-sonnet-4-5"},
-    )
-
-    state = await impl.load_state(message=message, session_id="session")
-    stream = await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
-    events = [event async for event in stream]
-
-    assert [(event.kind, event.data) for event in events] == [("text", {"delta": "agent-output"})]
-    assert agent.run_stream_calls == [("session", "prompt", state, "anthropic:claude-sonnet-4-5")]
-
-
-@pytest.mark.asyncio
-async def test_run_model_stream_forwards_state_model_override(tmp_path: Path) -> None:
-    """state['model'] must be forwarded as the per-call model override."""
-    _, impl, agent = _build_impl(tmp_path)
-    state = {"model": "openai:gpt-4o"}
-
-    await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
-
-    assert agent.run_stream_calls == [("session", "prompt", state, "openai:gpt-4o")]
-
-
-@pytest.mark.asyncio
-async def test_run_model_stream_passes_none_when_state_has_no_model(tmp_path: Path) -> None:
-    """Without state['model'] the agent must fall back to its configured model."""
-    _, impl, agent = _build_impl(tmp_path)
-    state = {"context": "ctx"}
-
-    await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
-
-    assert agent.run_stream_calls[-1][3] is None
 
 
 def test_system_prompt_appends_workspace_agents_file(tmp_path: Path) -> None:

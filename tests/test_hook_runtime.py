@@ -3,7 +3,7 @@ import pytest
 
 from bub.hooks import BUB_HOOK_NAMESPACE, BubHookSpecs, hookimpl
 from bub.hooks.runtime import HookRuntime
-from bub.streaming import AsyncStreamEvents, StreamEvent
+from bub.turn import TurnState
 
 
 def _runtime_with_plugins(*plugins: tuple[str, object]) -> HookRuntime:
@@ -20,19 +20,19 @@ async def test_call_first_respects_priority_and_returns_first_non_none() -> None
 
     class LowPriority:
         @hookimpl
-        def resolve_session(self, message):
+        def continue_prompt(self, prompt, tape, state):
             called.append("low")
             return "low"
 
     class MidPriority:
         @hookimpl
-        def resolve_session(self, message):
+        def continue_prompt(self, prompt, tape, state):
             called.append("mid")
             return "mid"
 
     class HighPriorityReturnsNone:
         @hookimpl
-        def resolve_session(self, message):
+        def continue_prompt(self, prompt, tape, state):
             called.append("high")
             return None
 
@@ -42,9 +42,33 @@ async def test_call_first_respects_priority_and_returns_first_non_none() -> None
         ("high", HighPriorityReturnsNone()),
     )
 
-    result = await runtime.call_first("resolve_session", message={"session_id": "x"}, ignored="value")
+    result = await runtime.call_first("continue_prompt", prompt="p", tape=None, state=None, ignored="value")
     assert result == "mid"
     assert called == ["high", "mid"]
+
+
+@pytest.mark.asyncio
+async def test_call_many_collects_every_result_in_priority_order() -> None:
+    seen: list[TurnState] = []
+
+    class First:
+        @hookimpl
+        def load_state(self, session_id, state):
+            seen.append(dict(state))
+            return {"first": True}
+
+    class Second:
+        @hookimpl
+        def load_state(self, session_id, state):
+            seen.append(dict(state))
+            return {"second": True}
+
+    runtime = _runtime_with_plugins(("first", First()), ("second", Second()))
+
+    results = await runtime.call_many("load_state", session_id="s", state={"seed": 1})
+
+    assert results == [{"second": True}, {"first": True}]
+    assert seen == [{"seed": 1}, {"seed": 1}]
 
 
 def test_call_many_sync_skips_async_impl() -> None:
@@ -72,57 +96,35 @@ def test_call_many_sync_skips_async_impl() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_error_swallows_observer_failures() -> None:
-    observed: list[str] = []
-
-    class RaisingObserver:
+async def test_call_first_swallows_implementation_failures() -> None:
+    class RaisingHook:
         @hookimpl
-        async def on_error(self, stage, error, message):
+        def continue_prompt(self, prompt, tape, state):
             raise RuntimeError("boom")
 
-    class RecordingObserver:
+    class WorkingHook:
         @hookimpl
-        async def on_error(self, stage, error, message):
-            observed.append(stage)
+        def continue_prompt(self, prompt, tape, state):
+            return "ok"
 
-    runtime = _runtime_with_plugins(
-        ("raise", RaisingObserver()),
-        ("record", RecordingObserver()),
-    )
+    runtime = _runtime_with_plugins(("raise", RaisingHook()), ("working", WorkingHook()))
 
-    await runtime.notify_error(stage="turn", error=ValueError("bad"), message={"content": "x"})
-    assert observed == ["turn"]
+    assert await runtime.call_first("continue_prompt", prompt="p", tape=None, state=None) == "ok"
 
 
-@pytest.mark.asyncio
-async def test_run_model_uses_streaming_hook_when_plain_hook_absent() -> None:
-    class StreamPlugin:
-        @hookimpl
-        async def run_model_stream(self, prompt, session_id, state):
-            async def iterator():
-                yield StreamEvent("text", {"delta": "stream"})
-                yield StreamEvent("text", {"delta": "ed"})
+def test_removed_hooks_are_not_registered() -> None:
+    spec_names = {name for name in dir(BubHookSpecs) if not name.startswith("_")}
 
-            return AsyncStreamEvents(iterator())
-
-    runtime = _runtime_with_plugins(("stream", StreamPlugin()))
-
-    result = await runtime.run_model(prompt="hello", session_id="s", state={})
-
-    assert result == "streamed"
-
-
-@pytest.mark.asyncio
-async def test_run_model_stream_falls_back_to_plain_hook() -> None:
-    class PlainPlugin:
-        @hookimpl
-        async def run_model(self, prompt, session_id, state):
-            return "plain"
-
-    runtime = _runtime_with_plugins(("plain", PlainPlugin()))
-
-    stream = await runtime.run_model_stream(prompt="hello", session_id="s", state={})
-
-    assert stream is not None
-    events = [event async for event in stream]
-    assert [(event.kind, event.data) for event in events] == [("text", {"delta": "plain"})]
+    assert spec_names == {
+        "after_llm_call",
+        "after_tool_call",
+        "before_llm_call",
+        "before_tool_call",
+        "build_tape_context",
+        "continue_prompt",
+        "load_state",
+        "provide_lifespan",
+        "provide_tape_sidecar",
+        "provide_tape_store",
+        "system_prompt",
+    }

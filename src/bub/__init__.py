@@ -10,15 +10,12 @@ from bub.builtin.agent import Agent
 from bub.configure import Config, Settings, config
 from bub.framework import BubFramework
 from bub.hooks import hookimpl
-from bub.message import MediaItem, Message
 from bub.tools import Tool, ToolContext, tool
 
 __all__ = [
     "Agent",
     "BubFramework",
     "Config",
-    "MediaItem",
-    "Message",
     "Settings",
     "Tool",
     "ToolContext",

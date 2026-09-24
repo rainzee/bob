@@ -148,7 +148,7 @@ class Agent:
                     ])
                 else:
                     if state is None:
-                        state = await self.framework.build_state({"_runtime_agent": self}, session_id)
+                        state = await self.framework.build_state(session_id, {"_runtime_agent": self})
                     state["_runtime_agent"] = self
                     if model is None:
                         model = state.get("model")
