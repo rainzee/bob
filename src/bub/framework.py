@@ -61,7 +61,7 @@ class BubFramework:
         self._lifespans.extend(lifespans)
 
     @contextlib.asynccontextmanager
-    async def running(self) -> AsyncGenerator[contextlib.AsyncExitStack, None]:
+    async def running(self) -> AsyncGenerator[contextlib.AsyncExitStack]:
         """Acquire the registered lifespans and the default store.
 
         Yield an AsyncExitStack for additional application resources. Exit closes

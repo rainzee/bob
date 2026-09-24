@@ -97,7 +97,7 @@ async def test_source_failure_closes_and_propagates() -> None:
 async def test_closing_the_consumer_closes_the_inner_stream() -> None:
     """The outer stream owns the inner one, so closing the outer closes both."""
 
-    async def inner() -> AsyncGenerator[StreamEvent, None]:
+    async def inner() -> AsyncGenerator[StreamEvent]:
         yield StreamEvent("text", {"delta": "a"})
         yield StreamEvent("text", {"delta": "b"})
 

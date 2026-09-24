@@ -94,7 +94,7 @@ class _ForkCapture:
         self.exit_count = 0
 
     @contextlib.asynccontextmanager
-    async def fork_tape(self, tape_name: str, merge_back: bool = True) -> AsyncGenerator[None, None]:
+    async def fork_tape(self, tape_name: str, merge_back: bool = True) -> AsyncGenerator[None]:
         self.merge_back_values.append(merge_back)
         try:
             yield
@@ -116,7 +116,7 @@ class _FakeTape:
         pass
 
     @contextlib.asynccontextmanager
-    async def fork_tape(self, merge_back: bool = True) -> AsyncGenerator[_FakeTape, None]:
+    async def fork_tape(self, merge_back: bool = True) -> AsyncGenerator[_FakeTape]:
         async with self._fork.fork_tape(self.name, merge_back=merge_back):
             yield self
 

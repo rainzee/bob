@@ -213,7 +213,7 @@ class Agent:
         state: StreamState,
         model: str | None = None,
         allowed_tools: Collection[str] | None = None,
-    ) -> AsyncGenerator[StreamEvent, None]:
+    ) -> AsyncGenerator[StreamEvent]:
         display_model = model or self.model
         prompt_text = prompt if isinstance(prompt, str) else _extract_text_from_parts(prompt)
         # Only the first step carries the caller's message. Later steps continue on

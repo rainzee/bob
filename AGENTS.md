@@ -30,7 +30,7 @@ Tests live in `tests/`.
 
 ## Coding Style & Naming Conventions
 
-- Python 3.12+, 4-space indentation, and type hints for new or modified logic.
+- Python 3.13+, 4-space indentation, and type hints for new or modified logic. Use the 3.13 standard library and `typing`; there are no compatibility shims or version guards in this tree.
 - Use `snake_case` for modules/functions/variables, `PascalCase` for classes, and `UPPER_CASE` for constants.
 - Keep functions focused and composable; avoid hidden side effects.
 - Format and lint with Ruff. Keep line length within 120 unless an existing file clearly follows a different local convention.

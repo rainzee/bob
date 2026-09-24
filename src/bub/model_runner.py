@@ -86,7 +86,7 @@ class ModelRunner:
     ) -> AsyncStreamEvents:
         state = StreamState()
 
-        async def iterator() -> AsyncGenerator[StreamEvent, None]:
+        async def iterator() -> AsyncGenerator[StreamEvent]:
             run_id = self.generate_run_id()
             messages, new_messages = await self.build_messages(
                 tape=tape,
@@ -191,7 +191,7 @@ class ModelRunner:
         tape: Tape,
         state: StreamState,
         output: ModelOutputAccumulator,
-    ) -> AsyncGenerator[StreamEvent, None]:
+    ) -> AsyncGenerator[StreamEvent]:
         chat_request = ChatRequest(
             run_id=request.run_id,
             model=request.model,

@@ -6,15 +6,14 @@ import itertools
 import json
 import re
 import threading
-from collections.abc import Coroutine, Iterable, Sequence
+from collections.abc import Awaitable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, time
 from datetime import date as date_type
 from pathlib import Path
-from typing import Any, Protocol, Self, overload
+from typing import Any, Protocol, Self, TypeIs, overload
 
 from loguru import logger
-from typing_extensions import TypeIs
 
 from bub.errors import BubError, ErrorKind
 from bub.tape import TapeEntry
@@ -89,7 +88,7 @@ class TapeQuery[T: TapeStore | AsyncTapeStore]:
     @overload
     async def all(self: TapeQuery[AsyncTapeStore]) -> Iterable[TapeEntry]: ...
 
-    def all(self) -> Iterable[TapeEntry] | Coroutine[None, None, Iterable[TapeEntry]]:
+    def all(self) -> Iterable[TapeEntry] | Awaitable[Iterable[TapeEntry]]:
         return self.store.fetch_all(self)
 
 

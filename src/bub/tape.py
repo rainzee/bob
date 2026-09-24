@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import inspect
-from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,7 +94,7 @@ class _LastAnchor:
 
 LAST_ANCHOR = _LastAnchor()
 type AnchorSelector = str | None | _LastAnchor
-type SelectedMessages = list[dict[str, Any]] | Coroutine[Any, Any, list[dict[str, Any]]]
+type SelectedMessages = list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]
 type ContextSelector = Callable[[Iterable[TapeEntry], "TapeContext"], SelectedMessages]
 
 
@@ -354,7 +354,7 @@ class Tape:
         return self.scoped(tape_name, context=context)
 
     @contextlib.asynccontextmanager
-    async def fork_tape(self, merge_back: bool = True) -> AsyncGenerator[Tape, None]:
+    async def fork_tape(self, merge_back: bool = True) -> AsyncGenerator[Tape]:
         from bub.store import ForkTapeStore
 
         managed_sidecars = tuple(sidecar_tape_name(self.name, sidecar.name) for sidecar in self.sidecars)
