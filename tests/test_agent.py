@@ -10,13 +10,11 @@ import pytest
 from any_llm.types.completion import ChatCompletionChunk
 from conftest import RecordingClient
 
-import bub.builtin.tools  # noqa: F401  — registers builtin tools (incl. `model`)
 from bub import BubFramework
-from bub.builtin import battery_tools
-from bub.builtin.agent import Agent
-from bub.builtin.model_runner import ModelRunner
+from bub.agent import Agent
 from bub.errors import BubError
 from bub.hooks import Hooks
+from bub.model_runner import ModelRunner
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import TapeContext
 from bub.tools import tool
@@ -53,9 +51,8 @@ def _make_agent() -> Agent:
 
     agent.framework = framework
     agent.model = "test:model"
-    agent.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
+    agent.tools = {}
     agent.tape_store = None
-    agent.skill_dirs = ()
     agent.tape_context = TapeContext(state={})
     agent.sidecars = ()
     agent.hooks = Hooks()

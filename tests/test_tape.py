@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from bub.builtin.context import default_tape_context
+from bub.context import default_tape_context
 from bub.store import AsyncTapeStoreAdapter, ForkTapeStore, InMemoryTapeStore
 from bub.tape import Tape, TapeContext, TapeEntry
 

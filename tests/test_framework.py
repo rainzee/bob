@@ -180,6 +180,7 @@ def test_settings_machinery_is_gone() -> None:
     import bub
 
     assert importlib.util.find_spec("bub.configure") is None
-    assert importlib.util.find_spec("bub.builtin.settings") is None
+    assert importlib.util.find_spec("bub.builtin") is None
+    assert importlib.util.find_spec("bub.skills") is None
     assert "Config" not in bub.__all__
     assert "Settings" not in bub.__all__

@@ -2,16 +2,19 @@
 
 ## Project Structure & Module Organization
 
-Core code lives under `src/`:
+Core code lives under `src/`, and there is no `builtin/` layer: the library ships no tools, no provider and no skills.
 
 - `src/bub/framework.py`: the composition root: paths, resource slots and `running()`.
 - `src/bub/hooks.py`: the interception contracts, the `Hooks` value, and its per-slot execution semantics.
-- `src/bub/{streaming,errors}.py`: small kernel vocabulary owned by each concern.
-- `src/bub/builtin/`: builtin runtime, tools, tape services, and provider adapters.
-- `src/bub/builtin/hooks.py`: `BuiltinHooks` (turn pipeline) and `Battery` (opt-in tape store, spill, shells).
-- `src/bub/skills.py` / `src/bub/tools.py`: skill discovery over explicit roots, and the tool framework.
+- `src/bub/agent.py`: the turn loop over hooks, tools and the tape.
+- `src/bub/model_runner.py`: the `ChatClient`/`ChatRequest` boundary and the parsing of streamed chunks.
+- `src/bub/tape.py` / `src/bub/store.py` / `src/bub/context.py`: append-only records, the `TapeStore` protocol with its in-memory and JSONL implementations, and the entry-to-message replay.
+- `src/bub/tools.py`: the tool framework and executor.
+- `src/bub/{streaming,errors,sidecars,turn,utils}.py`: small kernel vocabulary owned by each concern.
 
-Everything is instance-scoped: no environment variables, no process-wide registries, no implicit user or working directories, no configuration file. The framework takes `workspace` and `home`; the agent takes its model, credentials, tools and skill roots as plain keyword arguments. Settings only exist as the host's own dict.
+Everything is instance-scoped: no environment variables, no process-wide registries, no implicit user or working directories, no configuration file. The framework takes `workspace` and `home`; the agent takes its model, its `ChatClient`, its tools and its hooks as plain keyword arguments. Settings only exist as the host's own dict, and the provider is the host's own SDK.
+
+Because the library emits no telemetry and configures no logging, the only observability surface is the `Hooks` slots and the tape itself.
 
 Tests live in `tests/`.
 
@@ -51,5 +54,5 @@ Tests live in `tests/`.
 
 ## Security & Configuration Tips
 
-- Never commit credentials. Pass them to `Agent` from your own secret store or an untracked file.
-- Bub reads no environment variables; provider SDKs may still read their own (for example `OPENROUTER_API_KEY`) when a key is not supplied through `Agent(api_key=...)`.
+- Never commit credentials. Construct your own client with them and pass it to `Agent`.
+- Bub reads no environment variables and holds no credentials; a provider SDK you bring may still read its own (for example `OPENROUTER_API_KEY`).

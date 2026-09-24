@@ -9,7 +9,6 @@ from contextlib import (
 from pathlib import Path
 from typing import Any
 
-from bub.tape import TapeEntry
 from bub.turn import TurnState
 
 type Lifespan = AsyncIterator[None] | AbstractAsyncContextManager[None] | Iterator[None] | AbstractContextManager[None]
@@ -24,12 +23,6 @@ def workspace_from_state(state: TurnState) -> Path:
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("turn state has no _runtime_workspace; pass state built by the framework")
     return Path(raw).expanduser().resolve()
-
-
-def get_entry_text(entry: TapeEntry) -> str:
-    import yaml
-
-    return yaml.safe_dump(entry.payload)
 
 
 async def maybe_context_manager(obj: Any, stack: AsyncExitStack) -> Any:

@@ -1,4 +1,4 @@
-"""Tape context helpers."""
+"""Tape entries to chat messages: the inverse of Tape.record_chat"""
 
 from __future__ import annotations
 

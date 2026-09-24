@@ -200,7 +200,7 @@ class TestModelRunnerHookIntegration:
     """Regression tests for PR #255 review findings (effective request, exactly-once)."""
 
     def _runner_and_tape(self, hooks: Hooks, client: RecordingClient):
-        from bub.builtin.model_runner import ModelRunner
+        from bub.model_runner import ModelRunner
         from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
         from bub.tape import Tape, TapeContext
 

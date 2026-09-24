@@ -18,12 +18,8 @@ from typing_extensions import TypeIs
 
 from bub.errors import BubError, ErrorKind
 from bub.tape import TapeEntry
-from bub.utils import get_entry_text
 
 WORD_PATTERN = re.compile(r"[a-z0-9_/-]+")
-MIN_FUZZY_QUERY_LENGTH = 3
-MIN_FUZZY_SCORE = 80
-MAX_FUZZY_CANDIDATES = 128
 
 
 class TapeStore(Protocol):
@@ -366,55 +362,17 @@ class FileTapeStore(InMemoryQueryMixin):
 
         count = 0
         for entry in reversed(entries):
-            payload_text = get_entry_text(entry).lower()
+            payload_text = json.dumps(entry.payload, sort_keys=True, default=str).lower()
             if payload_text in seen:
                 continue
             seen.add(payload_text)
 
-            if normalized_query in payload_text or self._is_fuzzy_match(normalized_query, payload_text):
+            if normalized_query in payload_text:
                 results.append(entry)
                 count += 1
                 if count >= limit:
                     break
         return results
-
-    @staticmethod
-    def _is_fuzzy_match(normalized_query: str, payload_text: str) -> bool:
-        from rapidfuzz import fuzz, process
-
-        if len(normalized_query) < MIN_FUZZY_QUERY_LENGTH:
-            return False
-
-        query_tokens = WORD_PATTERN.findall(normalized_query)
-        if not query_tokens:
-            return False
-        query_phrase = " ".join(query_tokens)
-        window_size = len(query_tokens)
-
-        source_tokens = WORD_PATTERN.findall(payload_text)
-        if not source_tokens:
-            return False
-
-        candidates: list[str] = []
-        for token in source_tokens:
-            candidates.append(token)
-            if len(candidates) >= MAX_FUZZY_CANDIDATES:
-                break
-
-        if window_size > 1:
-            max_window_start = len(source_tokens) - window_size + 1
-            for idx in range(max(0, max_window_start)):
-                candidates.append(" ".join(source_tokens[idx : idx + window_size]))
-                if len(candidates) >= MAX_FUZZY_CANDIDATES:
-                    break
-
-        best_match = process.extractOne(
-            query_phrase,
-            candidates,
-            scorer=fuzz.WRatio,
-            score_cutoff=MIN_FUZZY_SCORE,
-        )
-        return best_match is not None
 
     def _tape_file(self, tape: str) -> TapeFile:
         if tape not in self._tape_files:

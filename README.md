@@ -7,13 +7,13 @@
   <img alt="Bub logo" src="https://raw.githubusercontent.com/bubbuild/bub/refs/heads/main/website/src/assets/bub-logo.png" width="200">
 </picture>
 
-<p><strong>A tiny, plugin-free agent runtime.</strong></p>
+<p><strong>A tiny agent runtime, embedded as a library.</strong></p>
 
 </div>
 
 Bub is a small Python runtime for building agents in shared environments. It started in group chats, where multiple humans and agents had to work in the same conversation without hidden state, hand-wavy memory, or framework-specific magic.
 
-Built on [agents.md](https://agents.md/) and [Agent Skills](https://agentskills.io/) , Bub stays intentionally small. Every turn stage is a plain callback you pass in. Builtins are included but replaceable. Bub is a library: channels, CLIs, and deployment shells are the host application's business.
+Bub owns the turn loop and the tape. Everything else — which provider to call, which tools to offer, what the system prompt says, where settings come from — is passed in by the host. There are no builtin tools, no plugins, no settings layer, and no telemetry.
 
 [GitHub](https://github.com/rainzee/bob)
 
@@ -26,32 +26,45 @@ uv add bub
 ```python
 import asyncio
 from pathlib import Path
+from typing import Any
 
-import yaml
+from bub import Agent, BubFramework, ChatRequest, FileTapeStore, Tool, tool
 
-from bub import BubFramework
-from bub.builtin import Agent, Battery, BuiltinHooks, battery_tools
+
+class OpenAIClient:
+    """The host's model call, in whichever SDK it prefers"""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    async def stream(self, request: ChatRequest):
+        stream = await self._client.chat.completions.create(
+            model=request.model,
+            messages=request.messages,
+            tools=request.tools,
+            max_tokens=request.max_tokens,
+            stream=True,
+            **request.options,
+        )
+        async for chunk in stream:
+            yield chunk.model_dump()
+
+
+@tool
+def read_file(path: str) -> str:
+    """Read a UTF-8 text file."""
+    return Path(path).read_text(encoding="utf-8")
 
 
 async def main() -> None:
-    settings = yaml.safe_load(Path("config.yml").read_text(encoding="utf-8")) or {}
-
     framework = BubFramework(workspace=Path.cwd(), home=Path("./run"))
-    framework.add_hooks(BuiltinHooks(framework).hooks)
-
-    # Batteries are optional and come apart: take any of store, sidecars and lifespans.
-    battery = Battery(home=framework.home)
-    framework.add_hooks(battery.hooks)
-    framework.add_tape_store(battery.tape_store)
-    framework.add_sidecars(*battery.sidecars)
-    framework.add_lifespans(*battery.lifespans)
+    framework.add_tape_store(FileTapeStore(Path("./run/tapes")))
 
     agent = Agent(
         framework,
-        model=settings["model"],
-        api_key=settings["api_key"],
-        tools=battery_tools(),
-        skill_dirs=[Path("./skills")],
+        model="gpt-5",
+        client=OpenAIClient(openai.AsyncOpenAI()),
+        tools=[read_file],
     )
     async with framework.running():
         stream = await agent.run_stream(session_id="demo", prompt="Hello")
@@ -63,54 +76,79 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`battery_tools()` is the builtin tool set (bash, fs.*, tape.*, web.fetch, subagent,
-spill reader). `BuiltinHooks` owns only the turn pipeline; without `Battery` the
-runtime has no tape store and `Agent` starts with whatever tools you pass. Build
-your own with `@tool` / `Tool.from_callable` and inject storage with
-`tape_store=FileTapeStore("sessions")`.
+Tools are plain functions or `Tool.from_callable(...)`. Storage is any object
+that implements `TapeStore`; `FileTapeStore` and `InMemoryTapeStore` ship with
+the library, and the runtime falls back to memory when neither the framework nor
+the agent is given one.
 
 Everything is instance-scoped and explicit. `BubFramework` takes `workspace` and
-`home`; `Agent` takes its model, credentials, tools and skill roots; skill
-discovery only reads the roots you pass. The library reads no environment
-variables, touches no user directory, keeps no process-wide registry, and loads
-no configuration file: where settings come from is the host's decision.
-
-From a checkout, `uv sync` is enough; `make install` is a thin wrapper around it.
+`home`; `Agent` takes its model, its client, its tools and its hooks. The library
+reads no environment variables, touches no user directory, keeps no
+process-wide registry, loads no configuration file, and configures no logging:
+where anything comes from is the host's decision.
 
 ## Why Bub
 
-- **Composable by design.** Every turn stage is an ordered list of callbacks. Override one stage or replace the whole flow without forking the runtime.
-- **Tape context.** Context is rebuilt from append-only records, not carried around as mutable session state. Easier to inspect, replay, and hand off.
-- **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel, REPL, transport, or message envelope is baked in.
-- **Batteries optional.** Tools, skills, tape stores, and model execution ship with the runtime, but the batteries are opt-in and the tool set is passed to each agent explicitly.
-- **Operator equivalence.** Humans and agents work inside the same runtime boundaries, with the same evidence trail and handoff model. No hidden operator class.
+- **One boundary for the model.** `ChatClient` is a protocol your SDK already
+  nearly satisfies. The library never imports a provider.
+- **Composable by design.** Every turn stage is an ordered list of callbacks.
+  Override one stage or replace the whole flow without forking the runtime.
+- **Tape context.** Context is rebuilt from append-only records, not carried
+  around as mutable session state. Easier to inspect, replay, and hand off.
+- **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel,
+  REPL, transport, message envelope, or tool set is baked in.
+- **No options we invented.** No token cap, no step limit, no timeout, no
+  search heuristics: unset means unset, and every default you get is the one the
+  layer below chose.
+- **Operator equivalence.** Humans and agents work inside the same runtime
+  boundaries, with the same evidence trail and handoff model. No hidden operator
+  class.
 
 ## How It Works
 
-A turn is one call. `Agent.run_stream(session_id, prompt)` resolves the turn
-state through hooks, forks the session tape, then loops on the model until no
-tool calls remain:
+A turn is one call. `Agent.run_stream(session_id, prompt)` resolves the turn state
+through hooks, forks the session tape, then loops on the model until no tool calls
+remain:
 
 ```
-build_state → agent loop → model stream
-                 ↑              ↓
-          (same tape)      tool calls
+build_state → agent loop → client.stream(ChatRequest) → tape
+                 ↑                          ↓
+            (same tape)                tool calls
 ```
 
 Each stage is a slot on a `Hooks` value, so the host contributes state, system
 prompt, or tool interception without forking the runtime. Callbacks run in list
-order and later entries win; async and sync callbacks are both accepted; a
-failing callback raises. A continuation step sends no new user message: the tape
-already ends with the assistant tool calls and their results, so the loop just
-asks the model again.
+order and later entries win; async and sync callbacks are both accepted; a failing
+callback raises rather than being swallowed. A continuation step sends no new user
+message: the tape already ends with the assistant tool calls and their results, so
+the loop just asks the model again.
 
 Key source files:
 
 - Composition root: [`src/bub/framework.py`](https://github.com/bubbuild/bub/blob/main/src/bub/framework.py)
 - Hook contract: [`src/bub/hooks.py`](https://github.com/bubbuild/bub/blob/main/src/bub/hooks.py)
-- Agent loop: [`src/bub/builtin/agent.py`](https://github.com/bubbuild/bub/blob/main/src/bub/builtin/agent.py)
-- Builtin hooks: [`src/bub/builtin/hooks.py`](https://github.com/bubbuild/bub/blob/main/src/bub/builtin/hooks.py)
-- Skill discovery: [`src/bub/skills.py`](https://github.com/bubbuild/bub/blob/main/src/bub/skills.py)
+- Agent loop: [`src/bub/agent.py`](https://github.com/bubbuild/bub/blob/main/src/bub/agent.py)
+- Model boundary: [`src/bub/model_runner.py`](https://github.com/bubbuild/bub/blob/main/src/bub/model_runner.py)
+- Tape and stores: [`src/bub/tape.py`](https://github.com/bubbuild/bub/blob/main/src/bub/tape.py), [`src/bub/store.py`](https://github.com/bubbuild/bub/blob/main/src/bub/store.py)
+
+## The Model Boundary
+
+`ChatClient` is one method:
+
+```python
+class ChatClient(Protocol):
+    def stream(self, request: ChatRequest) -> AsyncIterator[dict[str, Any]]: ...
+```
+
+The request carries `run_id`, `model`, `messages`, `tools`, `max_tokens`,
+`reasoning_effort` and `options`. Messages and tool schemas use the OpenAI
+chat-completions shape, which is also the shape the tape records and
+`Tool.to_schema()` produces. The client yields chunks as JSON mappings: each
+chunk carries `choices[i].delta`, and the last one may carry `usage`.
+
+That is the whole contract. Which SDK you use, how credentials are supplied, what
+`model` means, whether you retry another model on failure, and how a provider's
+quirks are spelled are all on your side of the line.
 
 ## Extend It
 
@@ -120,17 +158,7 @@ slots you care about:
 ```python
 from pathlib import Path
 
-from bub import BubFramework, Hooks
-from bub.builtin import Agent, Battery, BuiltinHooks, battery_tools
-
-framework = BubFramework(workspace=Path("."), home=Path(".bub"))
-framework.add_hooks(BuiltinHooks(framework).hooks)
-
-battery = Battery(home=framework.home)
-framework.add_hooks(battery.hooks)
-framework.add_tape_store(battery.tape_store)
-framework.add_sidecars(*battery.sidecars)
-framework.add_lifespans(*battery.lifespans)
+from bub import Agent, BubFramework, Hooks
 
 
 def one_paragraph(prompt, state):
@@ -138,63 +166,60 @@ def one_paragraph(prompt, state):
 
 
 async def audit(call, result, state):
-    print("tool ran:", call.tool)
+    print("tool ran:", call.tool, "->", result.error or result.result)
 
 
+framework = BubFramework(workspace=Path("."), home=Path(".bub"))
 framework.add_hooks(Hooks(system_prompt=[one_paragraph], after_tool_call=[audit]))
 
-agent = Agent(framework, model="openai:gpt-5", tools=battery_tools())
+agent = Agent(framework, model="gpt-5", client=my_client)
 async with framework.running():
     ...
 ```
 
-`Battery` is optional and comes apart: `hooks`, `tape_store`, `sidecars` and
-`lifespans` each go into their own slot, so you can take the file store without
-the shell manager, or the spill sidecar without the store.
+The six slots are `load_state`, `system_prompt`, `before_llm_call`,
+`after_llm_call`, `before_tool_call` and `after_tool_call`. Supply-type values
+(tape store, sidecars, lifespans) are plain constructor slots on
+`BubFramework`, not callbacks.
 
 ## Parameters
 
 There is no settings layer. Every knob is a keyword argument on the object that
 uses it, so `Agent` is the whole surface for one agent:
 
-| Parameter               | Default   | Description                                              |
-| ----------------------- | --------- | -------------------------------------------------------- |
-| `model`                 | required  | Model identifier, `provider:model_id`                     |
-| `fallback_models`       | —         | Additional models tried when the primary call fails       |
-| `api_key`               | —         | Provider key, or a mapping keyed by provider              |
-| `api_base`              | —         | Custom provider endpoint, or a mapping keyed by provider  |
-| `client_args`           | —         | Extra arguments for the underlying model client           |
-| `completion_args`       | —         | Extra arguments forwarded to each completion call         |
-| `max_tokens`            | provider  | Max tokens per model call; unset sends no cap             |
-| `max_steps`             | unlimited | Tool-use loop limit                                       |
-| `model_timeout_seconds` | —         | Model call timeout (seconds)                              |
-| `tools`                 | —         | Tools available to this agent                             |
-| `skill_dirs`            | —         | Skill roots, first root wins on a name collision           |
-| `tape_store`            | framework | Store override; falls back to the framework's or memory    |
-| `sidecars`              | —         | Extra sidecars mounted after the framework's               |
-| `hooks`                 | —         | Extra callbacks appended after the framework's             |
+| Parameter               | Default   | Description                                             |
+| ----------------------- | --------- | ------------------------------------------------------- |
+| `model`                 | required  | Model identifier; the client decides what it means        |
+| `client`                | required  | The host's `ChatClient`                                  |
+| `chat_options`          | —         | Extra options added to every chat request                |
+| `max_tokens`            | client    | Per-call output cap; unset sends no cap                  |
+| `max_steps`             | unlimited | Tool-use loop limit                                      |
+| `model_timeout_seconds` | —         | Model call timeout (seconds)                             |
+| `tools`                 | —         | Tools available to this agent                            |
+| `tape_store`            | framework | Store override; falls back to the framework's or memory  |
+| `tape_context`          | chat replay | How tape entries become messages                       |
+| `sidecars`              | —         | Extra sidecars mounted after the framework's              |
+| `hooks`                 | —         | Extra callbacks appended after the framework's            |
 
-`Battery(home=..., spill_threshold=4096)` covers the batteries; `spill_threshold=0`
-disables spilling. Nothing is read from the environment, no file is loaded, and
-nothing is validated against a schema: build a `dict` however you like (YAML,
-argparse, a secret store) and pass the keys you need.
+`BubFramework(workspace=..., home=...)` adds `add_hooks`, `add_tape_store`,
+`add_sidecars` and `add_lifespans`. Nothing is read from the environment, no file
+is loaded, and nothing is validated against a schema: build a `dict` however you
+like (YAML, argparse, a secret store) and pass the keys you need.
 
 ```python
 import yaml
 from pathlib import Path
 
-from bub.builtin import Agent, Battery, battery_tools
+from bub import Agent, FileTapeStore
 
 settings = yaml.safe_load(Path("config.yml").read_text(encoding="utf-8")) or {}
 
 agent = Agent(
     framework,
     model=settings["model"],
-    api_key=settings.get("api_key"),
+    client=OpenAIClient(openai.AsyncOpenAI(api_key=settings["api_key"])),
     max_tokens=settings.get("max_tokens"),
-    tools=battery_tools(),
 )
-battery = Battery(home=framework.home, spill_threshold=settings.get("spill", {}).get("threshold", 4096))
 ```
 
 ## Background
@@ -209,12 +234,10 @@ Read more:
 
 ## Docs
 
-- [Getting Started](https://bub.build/docs/getting-started/) — install Bub and run the first turn
 - [Concepts](https://bub.build/docs/concepts/) — the mental model behind the runtime
-- [Skills](https://bub.build/docs/build/skills/) — discover, inspect, and author Agent Skills in Bub
-- [Build](https://bub.build/docs/build/) — write hooks, ship tools and skills
 
-Some of these pages describe the upstream CLI and channel packages that this repository no longer ships.
+The upstream docs also describe the CLI, channel and plugin packages that this
+repository no longer ships.
 
 ## Development
 

@@ -9,15 +9,15 @@ from typing import Any
 import pytest
 from conftest import RecordingClient, call, reasoning_chunk, text_chunk, tool_calls_chunk, usage_chunk
 
-from bub.builtin.context import default_tape_context
-from bub.builtin.model_runner import (
+from bub.context import default_tape_context
+from bub.errors import BubError, ErrorKind
+from bub.hooks import Hooks, LlmCallDecision
+from bub.model_runner import (
     ChatRequest,
     ModelRunner,
     parse_tool_call,
     tool_invocation,
 )
-from bub.errors import BubError, ErrorKind
-from bub.hooks import Hooks, LlmCallDecision
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
 from bub.tape import Tape, TapeContext
 from bub.tools import Tool, ToolExecutor

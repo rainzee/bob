@@ -1,8 +1,7 @@
-"""Runtime engine to process prompts with any-llm-sdk."""
+"""The turn loop: one prompt in, one event stream out"""
 
 from __future__ import annotations
 
-import re
 import sys
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Collection, Iterable, Mapping
@@ -10,17 +9,15 @@ from contextlib import AsyncExitStack, aclosing
 from dataclasses import replace
 from datetime import UTC, datetime
 from functools import cached_property
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-from bub.builtin.context import default_tape_context
-from bub.builtin.model_runner import ChatClient, ModelRunner
+from bub.context import default_tape_context
 from bub.framework import BubFramework
 from bub.hooks import Hooks
+from bub.model_runner import ChatClient, ModelRunner
 from bub.sidecars import TapeSidecar
-from bub.skills import discover_skills, render_skills_prompt
 from bub.store import AsyncTapeStore, AsyncTapeStoreAdapter, InMemoryTapeStore, TapeStore, is_async_tape_store
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape, TapeContext
@@ -28,11 +25,9 @@ from bub.tools import Tool, model_tools
 from bub.turn import TurnState
 from bub.utils import workspace_from_state
 
-HINT_RE = re.compile(r"\$([A-Za-z0-9_.-]+)")
-
 
 class Agent:
-    """Agent that processes prompts using hooks, tools, tape, and any-llm-sdk."""
+    """An agent loop over hooks, tools and a tape, calling a host-supplied client"""
 
     def __init__(
         self,
@@ -46,12 +41,11 @@ class Agent:
         model_timeout_seconds: float | None = None,
         tools: Collection[Tool] = (),
         tape_store: TapeStore | AsyncTapeStore | None = None,
-        skill_dirs: Collection[Path] = (),
         tape_context: TapeContext | None = None,
         sidecars: Collection[TapeSidecar] = (),
         hooks: Hooks | None = None,
     ) -> None:
-        """Create a builtin agent from explicitly passed model, tool and storage parameters.
+        """Create an agent from explicitly passed model, tool and storage parameters.
 
         Args:
             framework: Configured runtime supplying paths, resources and callbacks.
@@ -65,10 +59,8 @@ class Agent:
                 agent has no tools.
             tape_store: Explicit store, preferred over the framework's active
                 store. Without either, the agent uses an in-memory store.
-            skill_dirs: Skill roots in precedence order; an empty collection means
-                the agent sees no skills.
             tape_context: Template for this agent's sessions; defaults to the
-                builtin chat-replay selection.
+                chat-replay selection that turns tape entries back into messages.
             sidecars: Extra sidecars mounted after the framework's own.
             hooks: Extra callbacks for this agent, appended after the framework's.
 
@@ -78,7 +70,6 @@ class Agent:
         self.model = model
         self.tools = {tool.name: tool for tool in tools}
         self.tape_store = tape_store
-        self.skill_dirs = tuple(skill_dirs or ())
         self.tape_context = tape_context if tape_context is not None else default_tape_context()
         self.sidecars = tuple(sidecars or ())
         self.hooks = framework.hooks + (hooks or Hooks())
@@ -128,7 +119,6 @@ class Agent:
         prompt: str | list[dict],
         state: TurnState | None = None,
         model: str | None = None,
-        allowed_skills: Collection[str] | None = None,
         allowed_tools: Collection[str] | None = None,
         reasoning_effort: str | None = None,
     ) -> AsyncStreamEvents:
@@ -143,8 +133,6 @@ class Agent:
                 using this agent's store; supplied state skips that loading.
                 The current agent is always bound into the state.
             model: Per-turn override, ahead of the state and the agent's own model.
-            allowed_skills: Case-insensitive skill names available to this turn;
-                None leaves discovery unrestricted.
             allowed_tools: Instance tool names or model aliases for the agent loop;
                 None allows all instance tools and an empty collection allows none.
                 Command execution uses the instance's tools directly.
@@ -183,7 +171,6 @@ class Agent:
                     tape=tape,
                     prompt=prompt,
                     model=model,
-                    allowed_skills=allowed_skills,
                     allowed_tools=allowed_tools,
                 )
         except BaseException:
@@ -197,7 +184,6 @@ class Agent:
         tape: Tape,
         prompt: str | list[dict],
         model: str | None = None,
-        allowed_skills: Collection[str] | None = None,
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncStreamEvents:
         next_prompt: str | list[dict] = prompt
@@ -207,7 +193,6 @@ class Agent:
             {
                 "model": display_model,
                 "prompt": prompt,
-                "allowed_skills": list(allowed_skills) if allowed_skills else None,
                 "allowed_tools": list(allowed_tools) if allowed_tools else None,
             },
         )
@@ -217,7 +202,6 @@ class Agent:
             prompt=next_prompt,
             state=state,
             model=model,
-            allowed_skills=allowed_skills,
             allowed_tools=allowed_tools,
         )
         return AsyncStreamEvents(iterator, state=state)
@@ -228,7 +212,6 @@ class Agent:
         prompt: str | list[dict],
         state: StreamState,
         model: str | None = None,
-        allowed_skills: Collection[str] | None = None,
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         display_model = model or self.model
@@ -249,7 +232,6 @@ class Agent:
                     prompt=next_prompt,
                     prompt_text=prompt_text,
                     model=model,
-                    allowed_skills=allowed_skills,
                     allowed_tools=allowed_tools,
                 )
                 async with aclosing(output):
@@ -312,18 +294,6 @@ class Agent:
 
         raise RuntimeError(f"max_steps_reached={self.max_steps}")
 
-    def _load_skills_prompt(self, prompt: str, allowed_skills: set[str] | None = None) -> str:
-        skill_index = {
-            skill.name.casefold(): skill
-            for skill in discover_skills(self.skill_dirs)
-            if allowed_skills is None or skill.name.casefold() in allowed_skills
-        }
-        expanded_skills = set(HINT_RE.findall(prompt)) & set(skill_index.keys())
-        return render_skills_prompt(
-            list(skill_index.values()),
-            expanded_skills=expanded_skills,
-        )
-
     async def _run_once(
         self,
         *,
@@ -332,16 +302,11 @@ class Agent:
         prompt_text: str,
         model: str | None = None,
         allowed_tools: Collection[str] | None = None,
-        allowed_skills: Collection[str] | None = None,
     ) -> AsyncStreamEvents:
         if allowed_tools is not None:
             from bub.tools import resolve_tool_names
 
             allowed_tools = resolve_tool_names(allowed_tools, all_names=self.tools)
-        if allowed_skills is not None:
-            allowed_skills = {name.casefold() for name in allowed_skills}
-            tape.context.state["allowed_skills"] = list(allowed_skills)
-        if allowed_tools is not None:
             tools = [tool for tool in self.tools.values() if tool.name in allowed_tools]
         else:
             tools = list(self.tools.values())
@@ -350,7 +315,6 @@ class Agent:
             prompt=prompt,
             prompt_text=prompt_text,
             model=model,
-            allowed_skills=allowed_skills,
             tools=tools,
         )
 
@@ -361,12 +325,9 @@ class Agent:
         prompt: str | list[dict] | None,
         prompt_text: str,
         model: str | None,
-        allowed_skills: set[str] | None,
         tools: list[Tool],
     ) -> AsyncStreamEvents:
-        system_prompt = await self._system_prompt(
-            prompt_text, state=tape.context.state, allowed_skills=allowed_skills, tools=tools
-        )
+        system_prompt = await self._system_prompt(prompt_text, state=tape.context.state, tools=tools)
         resolved_model = model or self.model
 
         model_tools_for_call = model_tools(tools)
@@ -382,7 +343,6 @@ class Agent:
         self,
         prompt: str,
         state: TurnState,
-        allowed_skills: set[str] | None = None,
         tools: Iterable[Tool] | None = None,
     ) -> str:
         from bub.tools import render_tools_prompt
@@ -393,8 +353,6 @@ class Agent:
         tools_prompt = render_tools_prompt(tools if tools is not None else self.tools.values())
         if tools_prompt:
             blocks.append(tools_prompt)
-        if skills_prompt := self._load_skills_prompt(prompt, allowed_skills):
-            blocks.append(skills_prompt)
         return "\n\n".join(blocks)
 
 

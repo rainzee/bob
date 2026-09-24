@@ -11,8 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
-
 from bub.errors import BubError
 from bub.sidecars import TapeSidecar, sidecar_tape_name
 
@@ -279,7 +277,7 @@ class Tape:
         await self.store.append(tape_name, event)
         return [entry, event]
 
-    async def record_chat(  # noqa: C901
+    async def record_chat(
         self,
         *,
         run_id: str,
@@ -290,8 +288,6 @@ class Tape:
         tool_calls: list[dict[str, Any]] | None = None,
         tool_results: list[Any] | None = None,
         error: BubError | None = None,
-        response: Any | None = None,
-        provider: str | None = None,
         model: str | None = None,
         usage: dict[str, Any] | None = None,
     ) -> None:
@@ -315,26 +311,11 @@ class Tape:
             )
 
         data: dict[str, Any] = {"status": "error" if error is not None else "ok"}
-        resolved_usage = usage or self._extract_usage(response)
-        if resolved_usage is not None:
-            data["usage"] = resolved_usage
-        if provider:
-            data["provider"] = provider
+        if usage is not None:
+            data["usage"] = usage
         if model:
             data["model"] = model
         await self.store.append(tape_name, TapeEntry.event("run", data, **meta))
-
-    @staticmethod
-    def _extract_usage(response: object) -> dict[str, Any] | None:
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return None
-        if isinstance(usage, dict):
-            return usage
-        if isinstance(usage, BaseModel):
-            payload = usage.model_dump(exclude_none=True)
-            return payload if isinstance(payload, dict) else None
-        return None
 
     @staticmethod
     def _sidecar_lifecycle_data(

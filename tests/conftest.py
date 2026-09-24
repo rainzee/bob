@@ -3,9 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from bub.builtin.hooks import Battery, BuiltinHooks
-from bub.builtin.model_runner import ChatRequest
-from bub.framework import BubFramework
+from bub.model_runner import ChatRequest
 
 
 def text_chunk(text: str) -> dict[str, Any]:
@@ -48,17 +46,3 @@ class RecordingClient:
                 self.closed += 1
 
         return chunks()
-
-
-def install_builtin(framework: BubFramework, *, batteries: bool = False) -> Battery | None:
-    """把 builtin 回调装到 framework 上, batteries=True 时一并装可选电池"""
-
-    framework.add_hooks(BuiltinHooks(framework).hooks)
-    if not batteries:
-        return None
-    battery = Battery(home=framework.home)
-    framework.add_hooks(battery.hooks)
-    framework.add_tape_store(battery.tape_store)
-    framework.add_sidecars(*battery.sidecars)
-    framework.add_lifespans(*battery.lifespans)
-    return battery
