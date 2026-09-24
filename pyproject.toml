@@ -25,9 +25,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://bub.build"
-Repository = "https://github.com/bubbuild/bub"
-Documentation = "https://bub.build"
+Homepage = "https://github.com/rainzee/bob"
+Repository = "https://github.com/rainzee/bob"
+Issues = "https://github.com/rainzee/bob/issues"
 
 [dependency-groups]
 dev = [

@@ -1,16 +1,5 @@
 # Bub
 
-<div align="center">
-
-<picture>
-  <source srcset="https://raw.githubusercontent.com/bubbuild/bub/refs/heads/main/website/src/assets/bub-logo-dark.png" media="(prefers-color-scheme: dark)">
-  <img alt="Bub logo" src="https://raw.githubusercontent.com/bubbuild/bub/refs/heads/main/website/src/assets/bub-logo.png" width="200">
-</picture>
-
-<p><strong>A tiny agent runtime, embedded as a library.</strong></p>
-
-</div>
-
 Bub is a small Python runtime for building agents in shared environments. It started in group chats, where multiple humans and agents had to work in the same conversation without hidden state, hand-wavy memory, or framework-specific magic.
 
 Bub owns the turn loop and the tape. Everything else — which provider to call, which tools to offer, what the system prompt says, where settings come from — is passed in by the host. There are no builtin tools, no plugins, no settings layer, and no telemetry.
@@ -125,11 +114,11 @@ the loop just asks the model again.
 
 Key source files:
 
-- Composition root: [`src/bub/framework.py`](https://github.com/bubbuild/bub/blob/main/src/bub/framework.py)
-- Hook contract: [`src/bub/hooks.py`](https://github.com/bubbuild/bub/blob/main/src/bub/hooks.py)
-- Agent loop: [`src/bub/agent.py`](https://github.com/bubbuild/bub/blob/main/src/bub/agent.py)
-- Model boundary: [`src/bub/model_runner.py`](https://github.com/bubbuild/bub/blob/main/src/bub/model_runner.py)
-- Tape and stores: [`src/bub/tape.py`](https://github.com/bubbuild/bub/blob/main/src/bub/tape.py), [`src/bub/store.py`](https://github.com/bubbuild/bub/blob/main/src/bub/store.py)
+- Composition root: [`src/bub/framework.py`](https://github.com/rainzee/bob/blob/main/src/bub/framework.py)
+- Hook contract: [`src/bub/hooks.py`](https://github.com/rainzee/bob/blob/main/src/bub/hooks.py)
+- Agent loop: [`src/bub/agent.py`](https://github.com/rainzee/bob/blob/main/src/bub/agent.py)
+- Model boundary: [`src/bub/model_runner.py`](https://github.com/rainzee/bob/blob/main/src/bub/model_runner.py)
+- Tape and stores: [`src/bub/tape.py`](https://github.com/rainzee/bob/blob/main/src/bub/tape.py), [`src/bub/store.py`](https://github.com/rainzee/bob/blob/main/src/bub/store.py)
 
 ## The Model Boundary
 
@@ -226,19 +215,6 @@ agent = Agent(
 
 Bub is shaped by one constraint: real collaboration is messier than a solo demo. In shared environments, operators need visible boundaries, auditable history, and extension points that do not collapse into framework sprawl.
 
-Read more:
-
-- [Why We Rewrote Bub](https://bub.build/posts/why-rewrite-bub/)
-- [Socialized Evaluation and Agent Partnership](https://bub.build/posts/socialized-evaluation/)
-- [Context from Tape](https://tape.systems)
-
-## Docs
-
-- [Concepts](https://bub.build/docs/concepts/) — the mental model behind the runtime
-
-The upstream docs also describe the CLI, channel and plugin packages that this
-repository no longer ships.
-
 ## Development
 
 ```bash
@@ -247,8 +223,8 @@ make check
 make test
 ```
 
-See [CONTRIBUTING.md](https://github.com/bubbuild/bub/blob/main/CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[Apache-2.0](https://github.com/bubbuild/bub/blob/main/LICENSE)
+[Apache-2.0](LICENSE)
