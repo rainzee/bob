@@ -7,7 +7,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from any_llm.types.completion import ChatCompletionChunk
 from conftest import RecordingClient
 
 from bub import BubFramework
@@ -64,26 +63,6 @@ def _make_agent() -> Agent:
 def _model_runner(agent: Agent) -> _FakeModelRunner:
     assert isinstance(agent.model_runner, _FakeModelRunner)
     return agent.model_runner
-
-
-def _chat_chunk(content: str) -> ChatCompletionChunk:
-    return ChatCompletionChunk.model_validate({
-        "id": "chatcmpl_test",
-        "object": "chat.completion.chunk",
-        "created": 0,
-        "model": "test:model",
-        "choices": [
-            {
-                "index": 0,
-                "finish_reason": "stop",
-                "delta": {"role": "assistant", "content": content},
-            }
-        ],
-    })
-
-
-async def _chat_stream(content: str) -> AsyncIterator[ChatCompletionChunk]:
-    yield _chat_chunk(content)
 
 
 class _ForkCapture:
@@ -210,7 +189,7 @@ async def test_agent_run_temp_session_does_not_merge_back() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_run_passes_model_to_llm() -> None:
-    """The model parameter should be forwarded to any-llm."""
+    """The model parameter should be forwarded to the chat client."""
     agent = _make_agent()
     fork_capture = _ForkCapture()
     fake_tapes = _FakeTapeFactory(fork_capture)
@@ -244,7 +223,7 @@ async def test_agent_run_empty_prompt_returns_error() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_run_model_defaults_to_none() -> None:
-    """When model is not specified, settings.model is used for any-llm."""
+    """When model is not specified, the client default is used."""
     agent = _make_agent()
     fork_capture = _ForkCapture()
     fake_tapes = _FakeTapeFactory(fork_capture)

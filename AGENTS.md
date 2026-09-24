@@ -23,7 +23,7 @@ Tests live in `tests/`.
 - `uv sync`: sync the Python dependencies.
 - `uv run ruff check .`: run Ruff directly when you only want lint feedback.
 - `uv run ruff format .`: format the tree.
-- `uv run mypy src`: run mypy directly against `src/`.
+- `uv run ty check`: run the type checker against `src/`.
 - `uv run pytest -q`: run the main test suite without doctests.
 - `uv run python -m pytest --doctest-modules`: run pytest with doctests enabled.
 - `uv lock --locked` then Ruff, formatting, and typing: validate the lockfile and the tree.
@@ -49,7 +49,7 @@ Tests live in `tests/`.
 - For PRs, include:
   - what changed and why
   - impacted modules or commands
-  - verification performed (`ruff`, `mypy`, `pytest`, docs build if relevant)
+  - verification performed (`ruff`, `ty`, `pytest`, docs build if relevant)
   - docs updates when CLI behavior, commands, or architecture changed
 
 ## Security & Configuration Tips

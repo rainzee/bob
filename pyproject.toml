@@ -33,8 +33,8 @@ Issues = "https://github.com/rainzee/bob/issues"
 dev = [
     "pytest>=7.2.0",
     "pytest-asyncio>=1.3.0",
-    "mypy>=0.991",
     "ruff>=0.11.5",
+    "ty>=0.0.83",
 ]
 
 [build-system]
@@ -55,17 +55,11 @@ only-include = ["src/bub", "tests"]
 sources = ["src"]
 only-include = ["src/bub"]
 
-[tool.mypy]
-files = ["src"]
-python_version = "3.13"
-disallow_untyped_defs = false
-disallow_any_unimported = false
-no_implicit_optional = true
-check_untyped_defs = true
-warn_return_any = true
-warn_unused_ignores = true
-show_error_codes = true
-ignore_missing_imports = false
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.ty.src]
+include = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -76,7 +76,7 @@ def _validate_without_context(func: Callable[..., Any], signature: inspect.Signa
     validate_target.__qualname__ = getattr(func, "__qualname__", validate_target.__name__)
     validate_target.__annotations__ = dict(getattr(func, "__annotations__", {}))
     validate_target.__annotations__.pop("context", None)
-    validate_target.__signature__ = _signature_without_context(signature)  # type: ignore[attr-defined]
+    validate_target.__signature__ = _signature_without_context(signature)  # ty: ignore[unresolved-attribute]
     return validate_call(validate_target)
 
 
@@ -94,7 +94,7 @@ class Tool:
         return self.handler(*args, **kwargs)
 
     def to_schema(self) -> dict[str, Any]:
-        """Build an any-llm completion tool payload."""
+        """Build the OpenAI chat-completions function schema for this tool."""
         return {
             "type": "function",
             "function": {

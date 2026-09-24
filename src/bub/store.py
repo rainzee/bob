@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, time
 from datetime import date as date_type
 from pathlib import Path
-from typing import Protocol, Self, TypeIs, overload
+from typing import Protocol, Self, TypeIs, cast, overload
 
 from loguru import logger
 
@@ -89,7 +89,10 @@ class TapeQuery[T: TapeStore | AsyncTapeStore]:
     async def all(self: TapeQuery[AsyncTapeStore]) -> Iterable[TapeEntry]: ...
 
     def all(self) -> Iterable[TapeEntry] | Awaitable[Iterable[TapeEntry]]:
-        return self.store.fetch_all(self)
+        if is_async_tape_store(self.store):
+            return cast("AsyncTapeStore", self.store).fetch_all(self)
+
+        return cast("TapeStore", self.store).fetch_all(self)
 
 
 def _anchor_index(

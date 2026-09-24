@@ -45,4 +45,4 @@ jobs:
         run: uv run python -m pytest tests
 
       - name: Check typing
-        run: uv run mypy
+        run: uv run ty check

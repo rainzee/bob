@@ -84,7 +84,7 @@ Now you can make your changes locally.
 uv lock --locked
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src
+uv run ty check
 ```
 
 Now, validate that all unit tests are passing:
