@@ -25,16 +25,21 @@ uv add bub
 
 ```python
 import asyncio
+from pathlib import Path
 
-from bub import BubFramework
+from bub import BubFramework, Config
 from bub.builtin import Agent, battery_tools
 
 
 async def main() -> None:
-    framework = BubFramework()
+    framework = BubFramework(
+        workspace=Path.cwd(),
+        home=Path("./run"),
+        config=Config({"model": "openai:gpt-5", "api_key": "sk-..."}),
+    )
     # batteries=True adds the file tape store, tool-output spill, and shell lifecycle.
     framework.load_builtin_hooks(batteries=True)
-    agent = Agent(framework, tools=battery_tools())
+    agent = Agent(framework, tools=battery_tools(), skill_dirs=[Path("./skills")])
     async with framework.running():
         stream = await agent.run_stream(session_id="demo", prompt="Hello")
         async for event in stream:
@@ -51,9 +56,16 @@ pipeline and provide no tape store, and `Agent` starts with whatever tools you
 pass; build your own with `@tool` / `Tool.from_callable` and inject storage with
 `tape_store=FileTapeStore("sessions")`.
 
-`BubFramework(config_file=..., home=...)` owns this instance's config and home
-directory (`BUB_HOME` is read only when neither is given). There are no
-process-wide configuration or tool registries.
+Everything is instance-scoped and explicit. `BubFramework` takes `workspace`,
+`home`, and an optional `Config`; `Agent` takes its tools and skill roots; skill
+discovery only reads the roots you pass. The library reads no environment
+variables, touches no user directory, and keeps no process-wide registry.
+Build configuration from a mapping or a file:
+
+```python
+Config({"model": "openai:gpt-5"})
+Config.from_file(Path("./config.yml"))
+```
 
 From a checkout, `uv sync` is enough; `make install` is a thin wrapper around it.
 
@@ -111,18 +123,30 @@ See the [Build docs](https://bub.build/docs/build/) for hook guides, packaging, 
 
 ## Configuration
 
-| Variable                    | Default                      | Description                                          |
-| --------------------------- | ---------------------------- | ---------------------------------------------------- |
-| `BUB_MODEL`                 | required                     | Model identifier, `provider:model_id`                |
-| `BUB_API_KEY`               | —                            | Provider key, or a JSON object keyed by provider     |
-| `BUB_API_BASE`              | —                            | Custom provider endpoint, or a JSON object keyed by provider |
-| `BUB_CLIENT_ARGS`           | —                            | JSON object forwarded to the underlying model client |
-| `BUB_COMPLETION_ARGS`       | —                            | JSON object forwarded to each completion call         |
-| `BUB_MAX_STEPS`             | unlimited                    | Tool-use loop limit; must be a positive integer      |
-| `BUB_MAX_TOKENS`            | `16384`                      | Max tokens per model call                            |
-| `BUB_MODEL_TIMEOUT_SECONDS` | —                            | Model call timeout (seconds)                         |
-| `BUB_SPILL_THRESHOLD`       | `4096`                       | Estimated tokens before tool output spills; `0` disables |
-| `BUB_HOME`                  | `~/.bub`                     | Home used for tapes and the default config file; ignored when passed to the constructor |
+Configuration is a mapping passed to `Config`, either directly or through
+`Config.from_file(path)`. Nothing is read from the environment. The root section
+is `AgentSettings`; other sections belong to plugins registered with `@config`.
+
+| Key                     | Default    | Description                                             |
+| ----------------------- | ---------- | ------------------------------------------------------- |
+| `model`                 | required   | Model identifier, `provider:model_id`                    |
+| `fallback_models`       | —          | Additional models tried when the primary call fails      |
+| `api_key`               | —          | Provider key, or a mapping keyed by provider             |
+| `api_base`              | —          | Custom provider endpoint, or a mapping keyed by provider |
+| `client_args`           | —          | Extra arguments for the underlying model client          |
+| `completion_args`       | —          | Extra arguments forwarded to each completion call        |
+| `max_steps`             | unlimited  | Tool-use loop limit; must be a positive integer          |
+| `max_tokens`            | `16384`    | Max tokens per model call                                |
+| `model_timeout_seconds` | —          | Model call timeout (seconds)                             |
+
+```yaml
+model: openai:gpt-5
+api_key:
+  openai: sk-...
+max_tokens: 8192
+spill:
+  threshold: 4096
+```
 
 ## Background
 

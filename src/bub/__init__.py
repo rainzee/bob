@@ -8,13 +8,12 @@ from importlib.metadata import version as metadata_version
 
 from bub.builtin.agent import Agent
 from bub.configure import Config, Settings, config
-from bub.framework import DEFAULT_HOME, BubFramework
+from bub.framework import BubFramework
 from bub.hooks import hookimpl
 from bub.message import MediaItem, Message
 from bub.tools import Tool, ToolContext, tool
 
 __all__ = [
-    "DEFAULT_HOME",
     "Agent",
     "BubFramework",
     "Config",

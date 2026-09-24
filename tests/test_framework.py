@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 import importlib.metadata
-import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import patch
 
 import pytest
 from conftest import DemoSettings
 
 from bub.builtin.settings import AgentSettings
+from bub.configure import Config
 from bub.framework import BubFramework
 from bub.hooks import hookimpl
 from bub.message import Message
 from bub.streaming import StreamState
 
 
-def test_get_system_prompt_uses_priority_order_and_skips_empty_results() -> None:
-    framework = BubFramework()
+def test_get_system_prompt_uses_priority_order_and_skips_empty_results(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
     class LowPriorityPlugin:
         @hookimpl
@@ -43,8 +43,8 @@ def test_get_system_prompt_uses_priority_order_and_skips_empty_results() -> None
     assert prompt == "low\n\nhigh"
 
 
-def test_get_tape_sidecars_combines_plugins_and_prefers_the_highest_priority_name() -> None:
-    framework = BubFramework()
+def test_get_tape_sidecars_combines_plugins_and_prefers_the_highest_priority_name(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
     class Sidecar:
         def __init__(self, name: str, source: str) -> None:
@@ -71,8 +71,8 @@ def test_get_tape_sidecars_combines_plugins_and_prefers_the_highest_priority_nam
 
 
 @pytest.mark.asyncio
-async def test_continue_prompt_awaits_high_priority_async_hook() -> None:
-    framework = BubFramework()
+async def test_continue_prompt_awaits_high_priority_async_hook(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
     tape = cast(Any, SimpleNamespace(context=SimpleNamespace(state={})))
     state = StreamState(usage={"total_tokens": 42})
     called: list[str] = []
@@ -101,8 +101,8 @@ async def test_continue_prompt_awaits_high_priority_async_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_running_enters_tape_store_once_and_reuses_it() -> None:
-    framework = BubFramework()
+async def test_running_enters_tape_store_once_and_reuses_it(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
     class RecordingTapeStore:
         def __init__(self) -> None:
@@ -132,7 +132,7 @@ async def test_running_enters_tape_store_once_and_reuses_it() -> None:
     assert tape_store.exit_count == 1
 
 
-def test_load_hooks_loads_root_and_named_config_sections(monkeypatch: pytest.MonkeyPatch, write_config) -> None:
+def test_load_hooks_loads_root_and_named_config_sections(write_config) -> None:
     expected = "test-token"
     config_file = write_config(
         f"""
@@ -141,35 +141,33 @@ demo:
     token: {expected}
 """.strip()
     )
+    framework = BubFramework(
+        workspace=config_file.parent, home=config_file.parent, config=Config.from_file(config_file)
+    )
 
-    with patch.dict(os.environ, {}, clear=True):
-        monkeypatch.chdir(config_file.parent)
-        framework = BubFramework(config_file=config_file)
+    framework.load_hooks()
 
-        framework.load_hooks()
-
-        assert framework.config.ensure(AgentSettings).model == "openai:gpt-5"
-        assert framework.config.ensure(DemoSettings).token == expected
+    assert framework.config.ensure(AgentSettings).model == "openai:gpt-5"
+    assert framework.config.ensure(DemoSettings).token == expected
 
 
 def test_load_hooks_initializes_callable_plugins_after_config_load(
-    monkeypatch: pytest.MonkeyPatch, write_config
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    with patch.dict(os.environ, {}, clear=True):
-        framework = BubFramework(config_file=write_config("model: openai:gpt-5"))
+    framework = BubFramework(workspace=tmp_path, home=tmp_path, config=Config({"model": "openai:gpt-5"}))
 
-        class SettingsAwarePlugin:
-            def __init__(self, framework: BubFramework) -> None:
-                self.model = framework.config.ensure(AgentSettings).model
+    class SettingsAwarePlugin:
+        def __init__(self, framework: BubFramework) -> None:
+            self.model = framework.config.ensure(AgentSettings).model
 
-            @hookimpl
-            def provide_tape_store(self) -> None:
-                return None
+        @hookimpl
+        def provide_tape_store(self) -> None:
+            return None
 
-        entry_point = SimpleNamespace(name="config-plugin", load=lambda: SettingsAwarePlugin)
-        monkeypatch.setattr(importlib.metadata, "entry_points", lambda group: [entry_point])
+    entry_point = SimpleNamespace(name="config-plugin", load=lambda: SettingsAwarePlugin)
+    monkeypatch.setattr(importlib.metadata, "entry_points", lambda group: [entry_point])
 
-        framework.load_hooks()
+    framework.load_hooks()
 
     plugin = framework.plugin_manager.get_plugin("config-plugin")
     assert isinstance(plugin, SettingsAwarePlugin)
@@ -177,8 +175,8 @@ def test_load_hooks_initializes_callable_plugins_after_config_load(
 
 
 @pytest.mark.asyncio
-async def test_process_inbound_runs_model_and_saves_state() -> None:
-    framework = BubFramework()
+async def test_process_inbound_runs_model_and_saves_state(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
     saved_outputs: list[str] = []
 
     class RuntimePlugin:

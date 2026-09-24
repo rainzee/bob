@@ -38,7 +38,7 @@ class Agent:
         *,
         tools: Collection[Tool] = (),
         tape_store: TapeStore | AsyncTapeStore | None = None,
-        skill_dirs: Collection[Path] | None = None,
+        skill_dirs: Collection[Path] = (),
     ) -> None:
         """Create a builtin agent with instance-specific tools, skills, and storage.
 
@@ -49,8 +49,8 @@ class Agent:
                 agent has no tools.
             tape_store: Explicit store, preferred over the framework's active
                 store. Without either, the agent uses an in-memory store.
-            skill_dirs: Skill roots in precedence order. None uses project, user,
-                and builtin discovery; an empty collection disables discovery.
+            skill_dirs: Skill roots in precedence order; an empty collection means
+                the agent sees no skills.
 
         Model settings come from the framework's configuration. The caller owns
         the lifecycle of an explicitly supplied store.
@@ -59,7 +59,7 @@ class Agent:
         self.framework = framework
         self.tools = {tool.name: tool for tool in tools}
         self.tape_store = tape_store
-        self.skill_dirs = skill_dirs
+        self.skill_dirs = tuple(skill_dirs or ())
         self.model_runner = ModelRunner(self.settings, hooks=framework.get_agent_hooks())
 
     @cached_property
@@ -155,6 +155,7 @@ class Agent:
                     if reasoning_effort is not None:
                         state["reasoning_effort"] = reasoning_effort
                     state.setdefault("session_id", session_id)
+                    state.setdefault("_runtime_workspace", str(self.framework.workspace))
                     tape = self.tape.session_tape(
                         session_id, workspace_from_state(state), context=replace(self.tape.context, state=state)
                     )
@@ -326,10 +327,10 @@ class Agent:
 
         raise RuntimeError(f"max_steps_reached={self.settings.max_steps}")
 
-    def _load_skills_prompt(self, prompt: str, workspace: Path, allowed_skills: set[str] | None = None) -> str:
+    def _load_skills_prompt(self, prompt: str, allowed_skills: set[str] | None = None) -> str:
         skill_index = {
             skill.name.casefold(): skill
-            for skill in discover_skills(workspace, skill_dirs=self.skill_dirs)
+            for skill in discover_skills(self.skill_dirs)
             if allowed_skills is None or skill.name.casefold() in allowed_skills
         }
         expanded_skills = set(HINT_RE.findall(prompt)) & set(skill_index.keys())
@@ -414,8 +415,7 @@ class Agent:
         tools_prompt = render_tools_prompt(tools if tools is not None else self.tools.values())
         if tools_prompt:
             blocks.append(tools_prompt)
-        workspace = workspace_from_state(state)
-        if skills_prompt := self._load_skills_prompt(prompt, workspace, allowed_skills):
+        if skills_prompt := self._load_skills_prompt(prompt, allowed_skills):
             blocks.append(skills_prompt)
         return "\n\n".join(blocks)
 

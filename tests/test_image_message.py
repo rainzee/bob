@@ -62,7 +62,7 @@ class FakeAgent:
 
 
 def _build_impl(tmp_path: Path) -> tuple[BubFramework, BuiltinImpl]:
-    framework = BubFramework()
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
     impl = BuiltinImpl(framework)
     impl._agent = FakeAgent(tmp_path)
     return framework, impl

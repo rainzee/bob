@@ -34,7 +34,7 @@ async def _sleeping_shell(manager: ShellManager, *, ignore_term: bool = False) -
 
 
 def _framework(tmp_path: Path) -> BubFramework:
-    framework = BubFramework(config_file=tmp_path / "config.yml")
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
     framework.load_builtin_hooks(batteries=True)
     return framework
 

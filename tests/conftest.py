@@ -4,8 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from pydantic import Field
-from pydantic_settings import SettingsConfigDict
+from pydantic import ConfigDict, Field
 
 from bub.configure import Config, Settings, config
 
@@ -14,7 +13,7 @@ from bub.configure import Config, Settings, config
 class DemoSettings(Settings):
     """Stand-in for a plugin-owned config section"""
 
-    model_config = SettingsConfigDict(env_prefix="BUB_DEMO_", extra="ignore")
+    model_config = ConfigDict(extra="ignore")
 
     token: str = Field(default="")
 
@@ -34,8 +33,6 @@ def load_config(write_config: Callable[[str], Path], monkeypatch: pytest.MonkeyP
     def _load(content: str = "") -> Config:
         config_file = write_config(content)
         monkeypatch.chdir(config_file.parent)
-        loaded = Config()
-        loaded.load(config_file)
-        return loaded
+        return Config.from_file(config_file)
 
     return _load

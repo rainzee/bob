@@ -178,21 +178,18 @@ def skill_describe(name: str | None = None, *, context: ToolContext) -> str:
     """Load the skill content by name. Return the location and skill content.
     If name is not provided, list all available skills in the current workspace.
     """
-    from bub.utils import workspace_from_state
-
     agent = _get_agent(context)
     allowed_skills = context.state.get("allowed_skills")
     if allowed_skills is not None and name and name.casefold() not in allowed_skills:
         return f"(skill '{name}' is not allowed in this context)"
 
-    workspace = workspace_from_state(context.state)
-    skill_index = {skill.name: skill for skill in discover_skills(workspace, skill_dirs=agent.skill_dirs)}
+    skill_index = {skill.name.casefold(): skill for skill in discover_skills(agent.skill_dirs)}
     if name is None:
         return "Available skills:\n" + "\n".join(f"- {skill.name}" for skill in skill_index.values())
     if name.casefold() not in skill_index:
         return "(no such skill)"
     skill = skill_index[name.casefold()]
-    return f"Location: {skill.location}\n---\n{skill.body() or '(no content)'}"
+    return f"Location: {skill.location}\n---\n{skill.body(agent.framework.config) or '(no content)'}"
 
 
 @tool(context=True, name="tape.info")

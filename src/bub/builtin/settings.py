@@ -6,8 +6,7 @@ from typing import Any
 
 from any_llm import AnyLLM
 from any_llm.constants import LLMProvider
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic import ConfigDict, Field, field_validator
 
 from bub.configure import Settings, config
 
@@ -25,7 +24,7 @@ class ModelCandidate:
 class AgentSettings(Settings):
     """Configuration settings for the Agent."""
 
-    model_config = SettingsConfigDict(env_prefix="BUB_", env_parse_none_str="null", extra="ignore")
+    model_config = ConfigDict(extra="ignore")
     model: str
     fallback_models: list[str] | None = None
     api_key: str | dict[str, str] | None = None
@@ -36,22 +35,6 @@ class AgentSettings(Settings):
     client_args: dict[str, Any] = Field(default_factory=dict)
     completion_args: dict[str, Any] = Field(default_factory=dict)
     verbose: int = Field(default=0, description="Verbosity level for logging. Higher means more verbose.", ge=0, le=2)
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return (
-            env_settings,
-            dotenv_settings,
-            init_settings,
-            file_secret_settings,
-        )
 
     @field_validator("client_args", "completion_args", mode="before")
     @classmethod

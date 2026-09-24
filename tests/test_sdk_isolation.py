@@ -5,6 +5,7 @@ import pytest
 
 from bub.builtin import Agent
 from bub.builtin.tools import run_subagent
+from bub.configure import Config
 from bub.framework import BubFramework
 from bub.store import InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent
@@ -21,11 +22,8 @@ def _reply() -> AsyncStreamEvents:
 
 
 @pytest.fixture
-def framework(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> BubFramework:
-    monkeypatch.setenv("BUB_HOME", str(tmp_path))
-    monkeypatch.setenv("BUB_MODEL", "test:model")
-    framework = BubFramework(config_file=tmp_path / "config.yml")
-    framework.workspace = tmp_path
+def framework(tmp_path: Path) -> BubFramework:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path, config=Config({"model": "test:model"}))
     framework.load_builtin_hooks()
     return framework
 

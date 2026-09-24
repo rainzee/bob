@@ -1,8 +1,9 @@
 from pathlib import Path
-from unittest.mock import patch
 
+import pytest
 from conftest import DemoSettings
 
+from bub.builtin.context import default_tape_context
 from bub.configure import Config
 from bub.skills import (
     SKILL_FILE_NAME,
@@ -41,64 +42,31 @@ def _write_skill(
 
 def test_skill_metadata_body_strips_frontmatter(tmp_path: Path) -> None:
     skill_file = _write_skill(tmp_path, "demo-skill", body="Line 1\nLine 2")
-    metadata = SkillMetadata(
-        name="demo-skill",
-        description="Demo",
-        location=skill_file,
-        source="project",
-    )
+    metadata = SkillMetadata(name="demo-skill", description="Demo", location=skill_file)
+
     assert metadata.body() == "Line 1\nLine 2"
 
 
-def test_skill_metadata_body_renders_config_templates(tmp_path: Path, load_config) -> None:
+def test_skill_metadata_body_renders_config_templates(tmp_path: Path) -> None:
     assert DemoSettings.__name__ == "DemoSettings"
     skill_file = _write_skill(
         tmp_path,
         "demo-skill",
         body='Token: "${config.demo.token}"\nSkill dir: $SKILL_DIR',
     )
-    metadata = SkillMetadata(
-        name="demo-skill",
-        description="Demo",
-        location=skill_file,
-        source="project",
-    )
+    metadata = SkillMetadata(name="demo-skill", description="Demo", location=skill_file)
 
-    with patch.dict("os.environ", {}, clear=True):
-        config = load_config(
-            """
-demo:
-  token: yaml-token
-""".strip(),
-        )
+    body = metadata.body(Config({"demo": {"token": "explicit-token"}}))
 
-        body = metadata.body(config)
-
-    assert 'Token: "yaml-token"' in body
+    assert 'Token: "explicit-token"' in body
     assert f"Skill dir: {tmp_path / 'demo-skill'}" in body
 
 
-def test_skill_metadata_body_renders_env_over_config(tmp_path: Path, write_config) -> None:
-    assert DemoSettings.__name__ == "DemoSettings"
+def test_skill_metadata_body_without_config_leaves_templates_alone(tmp_path: Path) -> None:
     skill_file = _write_skill(tmp_path, "demo-skill", body='Token: "${config.demo.token}"')
-    metadata = SkillMetadata(
-        name="demo-skill",
-        description="Demo",
-        location=skill_file,
-        source="project",
-    )
-    config_file = write_config(
-        """
-demo:
-  token: yaml-token
-""".strip()
-    )
+    metadata = SkillMetadata(name="demo-skill", description="Demo", location=skill_file)
 
-    with patch.dict("os.environ", {"BUB_DEMO_TOKEN": "env-token"}, clear=True):
-        fresh = Config()
-        fresh.load(config_file)
-
-        assert metadata.body(fresh) == 'Token: "env-token"'
+    assert metadata.body() == 'Token: "${config.demo.token}"'
 
 
 def test_read_skill_rejects_invalid_metadata_field_type(tmp_path: Path) -> None:
@@ -107,51 +75,83 @@ def test_read_skill_rejects_invalid_metadata_field_type(tmp_path: Path) -> None:
     content = "---\nname: bad-skill\ndescription: bad\nmetadata:\n  retries: 3\n---\nBody\n"
     (skill_dir / SKILL_FILE_NAME).write_text(content, encoding="utf-8")
 
-    assert _read_skill(skill_dir, source="project") is None
+    assert _read_skill(skill_dir) is None
 
 
-def test_parse_frontmatter_returns_empty_on_invalid_yaml() -> None:
-    content = "---\nname: [broken\n---\nbody\n"
-    assert _parse_frontmatter(content) == {}
+def test_read_skill_accepts_string_metadata(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "with-metadata", metadata={"owner": "team"})
+
+    metadata = _read_skill(tmp_path / "with-metadata")
+
+    assert metadata is not None
+    assert metadata.metadata["metadata"] == {"owner": "team"}
 
 
-def test_discover_skills_prefers_project_over_global_and_builtin(tmp_path: Path, monkeypatch) -> None:
-    project_root = tmp_path / "project"
-    global_root = tmp_path / "global"
-    builtin_root = tmp_path / "builtin"
-    for root in (project_root, global_root, builtin_root):
-        root.mkdir(parents=True)
+def test_discover_skills_scans_the_given_roots_only(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _write_skill(first, "shared", description="first version")
+    _write_skill(first, "first-only")
+    _write_skill(second, "shared", description="second version")
+    _write_skill(second, "second-only")
 
-    _write_skill(project_root, "shared", description="project version")
-    _write_skill(global_root, "shared", description="global version")
-    _write_skill(builtin_root, "shared", description="builtin version")
-    _write_skill(global_root, "global-only", description="global only")
+    discovered = {skill.name: skill.description for skill in discover_skills([first, second])}
 
-    monkeypatch.setattr(
-        "bub.skills.iter_skill_roots",
-        lambda _workspace: [
-            (project_root, "project"),
-            (global_root, "global"),
-            (builtin_root, "builtin"),
-        ],
-    )
+    assert discovered == {"shared": "first version", "first-only": "A skill", "second-only": "A skill"}
 
-    discovered = discover_skills(tmp_path)
-    index = {item.name: item for item in discovered}
-    assert index["shared"].description == "project version"
-    assert index["shared"].source == "project"
-    assert index["global-only"].source == "global"
+
+def test_discover_skills_ignores_missing_roots(tmp_path: Path) -> None:
+    assert discover_skills([tmp_path / "absent"]) == []
+
+
+def test_discover_skills_without_roots_finds_nothing(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "ignored")
+
+    assert discover_skills([]) == []
 
 
 def test_render_skills_prompt_includes_expanded_body(tmp_path: Path) -> None:
-    skill_file = _write_skill(tmp_path, "skill-a", description="desc", body="expanded body")
+    skill_file = _write_skill(tmp_path, "skill-a", body="Body A")
     skills = [
-        SkillMetadata(name="skill-a", description="desc", location=skill_file, source="project"),
-        SkillMetadata(name="skill-b", description="desc-b", location=skill_file, source="project"),
+        SkillMetadata(name="skill-a", description="A", location=skill_file),
+        SkillMetadata(name="skill-b", description="B", location=skill_file),
     ]
 
     rendered = render_skills_prompt(skills, expanded_skills={"skill-a"})
+
     assert "<available_skills>" in rendered
-    assert "- skill-a: desc" in rendered
-    assert "expanded body" in rendered
-    assert "- skill-b: desc-b" in rendered
+    assert "- skill-a: A" in rendered
+    assert "Location:" in rendered
+    assert "Body A" in rendered
+    assert "- skill-b: B" in rendered
+    assert "Body A" not in rendered.split("- skill-b: B")[1]
+
+
+def test_render_skills_prompt_is_empty_without_skills() -> None:
+    assert render_skills_prompt([]) == ""
+
+
+def test_parse_frontmatter_requires_leading_delimiter() -> None:
+    assert _parse_frontmatter("no frontmatter") == {}
+
+
+def test_parse_frontmatter_returns_lowercased_keys() -> None:
+    assert _parse_frontmatter("---\nName: x\n---\nbody") == {"name": "x"}
+
+
+def test_default_tape_context_selects_messages() -> None:
+    context = default_tape_context()
+
+    assert context.select is not None
+
+
+@pytest.mark.parametrize("name", ["UPPER", "has space", "trailing-", "-leading"])
+def test_read_skill_rejects_invalid_names(tmp_path: Path, name: str) -> None:
+    skill_dir = tmp_path / "valid-dir"
+    skill_dir.mkdir()
+    (skill_dir / SKILL_FILE_NAME).write_text(
+        f"---\nname: {name}\ndescription: ok\n---\nBody\n",
+        encoding="utf-8",
+    )
+
+    assert _read_skill(skill_dir) is None

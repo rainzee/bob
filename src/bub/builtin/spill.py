@@ -7,8 +7,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from loguru import logger
-from pydantic import Field
-from pydantic_settings import SettingsConfigDict
+from pydantic import ConfigDict, Field
 
 from bub import config
 from bub.configure import Settings
@@ -29,7 +28,7 @@ SPILL_SIDECAR_NAME = "spill"
 class SpillSettings(Settings):
     """Configuration owned by the builtin spill sidecar."""
 
-    model_config = SettingsConfigDict(env_prefix="BUB_SPILL_", extra="ignore", env_file=".env")
+    model_config = ConfigDict(extra="ignore")
 
     threshold: int = Field(
         default=4096,

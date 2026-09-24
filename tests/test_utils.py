@@ -14,9 +14,9 @@ def test_workspace_from_state_prefers_runtime_workspace_and_expands_user_home(mo
     assert workspace == expected
 
 
-def test_workspace_from_state_falls_back_to_current_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_workspace_from_state_requires_an_explicit_workspace() -> None:
+    with pytest.raises(ValueError, match="_runtime_workspace"):
+        workspace_from_state({})
 
-    workspace = workspace_from_state({"_runtime_workspace": "   "})
-
-    assert workspace == tmp_path.resolve()
+    with pytest.raises(ValueError, match="_runtime_workspace"):
+        workspace_from_state({"_runtime_workspace": "   "})

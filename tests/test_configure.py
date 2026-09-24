@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from conftest import DemoSettings
@@ -10,27 +8,38 @@ from conftest import DemoSettings
 from bub.builtin.settings import AgentSettings
 from bub.configure import Config
 
+MODEL = "test:model"
 
-def test_load_registers_root_and_named_config_sections(tmp_path: Path) -> None:
+
+def test_from_file_reads_registered_sections(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yml"
     expected_token = "123:abc"  # noqa: S105
     config_file.write_text(
         f"""
-model: openai:gpt-5
+model: {MODEL}
 demo:
   token: {expected_token}
 """.strip(),
         encoding="utf-8",
     )
 
-    with patch.dict(os.environ, {}, clear=True):
-        config = Config()
-        loaded = config.load(config_file)
+    config = Config.from_file(config_file)
 
-        assert loaded["model"] == "openai:gpt-5"
-        assert loaded["demo"]["token"] == expected_token
-        assert config.ensure(AgentSettings).model == "openai:gpt-5"
-        assert config.ensure(DemoSettings).token == expected_token
+    assert config.data == {"model": MODEL, "demo": {"token": expected_token}}
+    assert config.ensure(AgentSettings).model == MODEL
+    assert config.ensure(DemoSettings).token == expected_token
+
+
+def test_from_file_treats_a_missing_file_as_empty_configuration(tmp_path: Path) -> None:
+    config = Config.from_file(tmp_path / "config.yml")
+
+    assert config.data == {}
+
+
+def test_explicit_data_replaces_any_environment_reading() -> None:
+    config = Config({"model": MODEL})
+
+    assert config.ensure(AgentSettings).model == MODEL
 
 
 def test_ensure_caches_within_one_config_and_not_across_instances() -> None:
@@ -40,62 +49,25 @@ def test_ensure_caches_within_one_config_and_not_across_instances() -> None:
     assert Config().ensure(DemoSettings) is not config.ensure(DemoSettings)
 
 
-def test_get_value_reads_registered_section_from_yaml(load_config) -> None:
-    with patch.dict(os.environ, {}, clear=True):
-        config = load_config(
-            """
-demo:
-  token: yaml-token
-""".strip(),
-        )
+def test_get_value_reads_registered_section_from_data() -> None:
+    config = Config({"demo": {"token": "yaml-token"}})
 
-        assert config.get_value("demo.token") == "yaml-token"
+    assert config.get_value("demo.token") == "yaml-token"
 
 
-def test_get_value_prefers_registered_env_over_yaml(write_config) -> None:
-    config_file = write_config(
-        """
-demo:
-  token: yaml-token
-""".strip()
-    )
+def test_get_value_descends_into_registered_dict_field() -> None:
+    config = Config({"model": MODEL, "api_key": {"openai": "sk-yaml"}})
 
-    with patch.dict(os.environ, {"BUB_DEMO_TOKEN": "env-token"}, clear=True):
-        config = Config()
-        config.load(config_file)
-
-        assert config.get_value("demo.token") == "env-token"
+    assert config.get_value("api_key") == {"openai": "sk-yaml"}
+    assert config.get_value("api_key.openai") == "sk-yaml"
 
 
-def test_get_value_descends_into_registered_dict_field(load_config) -> None:
-    with patch.dict(os.environ, {}, clear=True):
-        config = load_config(
-            """
-model: test:model
-api_key:
-  openai: sk-yaml
-""".strip(),
-        )
-
-        assert config.get_value("api_key") == {"openai": "sk-yaml"}
-        assert config.get_value("api_key.openai") == "sk-yaml"
-
-
-def test_get_value_ignores_raw_unregistered_path(load_config) -> None:
-    config = load_config(
-        """
-model: test:model
-custom:
-  nested:
-    value: raw-value
-""".strip(),
-    )
+def test_get_value_ignores_raw_unregistered_path() -> None:
+    config = Config({"model": MODEL, "custom": {"nested": {"value": "raw-value"}}})
 
     with pytest.raises(KeyError):
         config.get_value("custom.nested.value")
 
 
-def test_get_value_returns_default_for_missing_path(load_config) -> None:
-    config = load_config("model: test:model")
-
-    assert config.get_value("missing.value", default="fallback") == "fallback"
+def test_get_value_returns_default_for_missing_path() -> None:
+    assert Config({"model": MODEL}).get_value("missing.value", default="fallback") == "fallback"

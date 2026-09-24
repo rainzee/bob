@@ -1,11 +1,11 @@
-"""Optional GenAI telemetry. Importing Bub never configures an exporter."""
+"""Optional GenAI telemetry. Bub only emits spans; configuring an exporter,
+resource, or sampler is the host's job through the OpenTelemetry SDK."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib
 import json
-import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
@@ -18,35 +18,6 @@ else:
         otel: Any = importlib.import_module("opentelemetry.trace")
     except ImportError:
         otel = None
-
-
-def configure_otlp() -> None:
-    """Configure opt-in HTTP export; preserve application-owned providers."""
-    if (
-        otel is None
-        or not (os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-        or os.getenv("OTEL_SDK_DISABLED", "").lower() == "true"
-        or not isinstance(otel.get_tracer_provider(), otel.ProxyTracerProvider)
-    ):
-        return
-    try:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except ImportError:
-        return
-
-    protocol = os.getenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") or os.getenv(
-        "OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"
-    )
-    if protocol != "http/protobuf":
-        raise ValueError("Bub's trace extra supports OTLP http/protobuf only.")
-
-    exporter = OTLPSpanExporter()
-    # The SDK reads resource/sampler settings and drains the batch queue at process exit.
-    provider = TracerProvider()
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-    otel.set_tracer_provider(provider)
 
 
 def _json(value: Any) -> str:

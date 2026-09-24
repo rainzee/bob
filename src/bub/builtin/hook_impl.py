@@ -1,7 +1,6 @@
 from collections.abc import AsyncIterator
 from datetime import datetime
 from difflib import get_close_matches
-from pathlib import Path
 from typing import Any, cast
 
 from bub.builtin.agent import Agent
@@ -17,6 +16,7 @@ from bub.store import TapeStore
 from bub.streaming import AsyncStreamEvents, StreamState
 from bub.tape import Tape, TapeContext
 from bub.turn import TurnState
+from bub.utils import workspace_from_state
 
 AGENTS_FILE_NAME = "AGENTS.md"
 DEFAULT_SYSTEM_PROMPT = """\
@@ -160,8 +160,7 @@ class BuiltinImpl:
         return DEFAULT_CONTINUE_PROMPT
 
     def _read_agents_file(self, state: TurnState) -> str:
-        workspace = state.get("_runtime_workspace", str(Path.cwd()))
-        prompt_path = Path(workspace) / AGENTS_FILE_NAME
+        prompt_path = workspace_from_state(state) / AGENTS_FILE_NAME
         if not prompt_path.is_file():
             return ""
         try:

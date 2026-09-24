@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import string
 import sys
-from collections.abc import Collection, Iterable
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,7 +16,6 @@ from bub.configure import Config
 
 PROJECT_SKILLS_DIR = ".agents/skills"
 SKILL_FILE_NAME = "SKILL.md"
-SKILL_SOURCES = ("project", "global")
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 CONFIG_TEMPLATE_PATTERN = re.compile(r"\$\{\s*config\.([a-zA-Z0-9_.-]+)\s*\}")
 
@@ -28,7 +27,6 @@ class SkillMetadata:
     name: str
     description: str
     location: Path
-    source: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def body(self, config: Config | None = None) -> str:
@@ -45,22 +43,17 @@ class SkillMetadata:
         })
 
 
-def discover_skills(workspace_path: Path, *, skill_dirs: Collection[Path] | None = None) -> list[SkillMetadata]:
-    """Discover skills from project, global, and builtin roots with override precedence."""
+def discover_skills(skill_dirs: Collection[Path]) -> list[SkillMetadata]:
+    """Discover skills in the given roots, first root wins on a name collision"""
 
     skills_by_name: dict[str, SkillMetadata] = {}
-    skill_roots_iter: Iterable[tuple[Path, str]]
-    if skill_dirs is not None:
-        skill_roots_iter = ((root, "custom") for root in skill_dirs)
-    else:
-        skill_roots_iter = iter_skill_roots(workspace_path)
-    for root, source in skill_roots_iter:
+    for root in skill_dirs:
         if not root.is_dir():
             continue
         for skill_dir in sorted(root.iterdir()):
             if not skill_dir.is_dir():
                 continue
-            metadata = _read_skill(skill_dir, source=source)
+            metadata = _read_skill(skill_dir)
             if metadata is None:
                 continue
             key = metadata.name.casefold()
@@ -89,7 +82,7 @@ def _render_config_templates(content: str, config: Config | None) -> str:
     return CONFIG_TEMPLATE_PATTERN.sub(replace, content)
 
 
-def _read_skill(skill_dir: Path, *, source: str) -> SkillMetadata | None:
+def _read_skill(skill_dir: Path) -> SkillMetadata | None:
     skill_file = skill_dir / SKILL_FILE_NAME
     if not skill_file.is_file():
         return None
@@ -109,7 +102,6 @@ def _read_skill(skill_dir: Path, *, source: str) -> SkillMetadata | None:
         name=name,
         description=description,
         location=skill_file.resolve(),
-        source=source,
         metadata={str(key).casefold(): value for key, value in metadata.items() if key is not None},
     )
 
@@ -165,15 +157,6 @@ def _is_valid_metadata_field(metadata_field: object) -> bool:
     if not isinstance(metadata_field, dict):
         return False
     return all(isinstance(key, str) and isinstance(value, str) for key, value in metadata_field.items())
-
-
-def iter_skill_roots(workspace_path: Path) -> list[tuple[Path, str]]:
-    """List the project and user skill roots, in precedence order"""
-
-    return [
-        (workspace_path / PROJECT_SKILLS_DIR, "project"),
-        (Path.home() / PROJECT_SKILLS_DIR, "global"),
-    ]
 
 
 def render_skills_prompt(

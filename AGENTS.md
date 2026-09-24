@@ -6,12 +6,14 @@ Core code lives under `src/`:
 
 - `src/bub/framework.py`: turn orchestration, hook loading, and resource lifecycle.
 - `src/bub/hooks/`: hook specifications, execution helpers, and interception contracts.
-- `src/bub/configure.py`: `Settings`, the `@config()` section registry, and the per-framework `Config` object.
+- `src/bub/configure.py`: `Settings`, the `@config()` section registry, and the per-instance `Config`.
 - `src/bub/message.py`: the concrete inbound envelope (`Message`) and media items.
 - `src/bub/{envelope,turn,streaming,errors}.py`: small kernel vocabulary owned by each concern.
 - `src/bub/builtin/`: builtin runtime, settings, tools, tape services, and provider adapters.
 - `src/bub/builtin/hook_impl.py`: `BuiltinImpl` (turn pipeline) and `BatteryImpl` (opt-in tape store, spill, shells).
-- `src/bub/skills.py` / `src/bub/tools.py`: skill discovery and tool registry.
+- `src/bub/skills.py` / `src/bub/tools.py`: skill discovery over explicit roots, and the tool framework.
+
+Everything is instance-scoped: no environment variables, no process-wide registries, no implicit user or working directories. The framework takes `workspace`, `home`, and an optional `Config`; the agent takes its tools and skill roots.
 
 Tests live in `tests/`.
 
@@ -51,6 +53,5 @@ Tests live in `tests/`.
 
 ## Security & Configuration Tips
 
-- Use `.env` for local secrets; never commit credentials.
-- Bub runtime settings are driven by `BUB_*` variables such as `BUB_MODEL`, `BUB_API_KEY`, and `BUB_API_BASE`.
-- Provider-specific keys such as `OPENROUTER_API_KEY` may still be consumed by downstream SDKs.
+- Never commit credentials. Pass them to `Config` from your own secret store or an untracked file.
+- Bub reads no environment variables; provider SDKs may still read their own (for example `OPENROUTER_API_KEY`) when a key is not supplied through configuration.

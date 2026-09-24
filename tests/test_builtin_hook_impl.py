@@ -15,6 +15,7 @@ from bub.builtin.hook_impl import (
     BatteryImpl,
     BuiltinImpl,
 )
+from bub.configure import Config
 from bub.framework import BubFramework
 from bub.message import Message
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
@@ -64,8 +65,12 @@ def _raise_value_error() -> None:
     raise ValueError("boom")
 
 
-def _build_impl(tmp_path: Path, config_file: Path | None = None) -> tuple[BubFramework, BuiltinImpl, FakeAgent]:
-    framework = BubFramework(config_file=config_file) if config_file is not None else BubFramework()
+def _build_impl(tmp_path: Path, config: Config | None = None) -> tuple[BubFramework, BuiltinImpl, FakeAgent]:
+    framework = BubFramework(
+        workspace=tmp_path,
+        home=tmp_path,
+        config=config if config is not None else Config({"model": "test:model"}),
+    )
     impl = BuiltinImpl(framework)
     agent = FakeAgent(tmp_path)
     impl._agent = agent
@@ -279,7 +284,7 @@ def test_system_prompt_ignores_missing_agents_file(tmp_path: Path) -> None:
 
 
 def test_battery_impl_provides_file_tape_store(tmp_path: Path) -> None:
-    framework = BubFramework(home=tmp_path)
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
     store = BatteryImpl(framework).provide_tape_store()
 

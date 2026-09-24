@@ -8,10 +8,12 @@ from bub.turn import TurnState
 
 
 def workspace_from_state(state: TurnState) -> Path:
+    """Return the workspace recorded on the turn state; the framework always sets it"""
+
     raw = state.get("_runtime_workspace")
-    if isinstance(raw, str) and raw.strip():
-        return Path(raw).expanduser().resolve()
-    return Path.cwd().resolve()
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("turn state has no _runtime_workspace; pass state built by the framework")
+    return Path(raw).expanduser().resolve()
 
 
 def get_entry_text(entry: TapeEntry) -> str:

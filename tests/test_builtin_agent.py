@@ -52,7 +52,7 @@ def _make_agent() -> Agent:
     agent.framework = framework
     agent.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
     agent.tape_store = None
-    agent.skill_dirs = None
+    agent.skill_dirs = ()
     agent.model_runner = _FakeModelRunner(agent.settings)
     return agent
 

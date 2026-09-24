@@ -44,7 +44,7 @@ def spans(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 
 @pytest.fixture
 def agent(tmp_path: Path) -> Agent:
-    framework = BubFramework(config_file=tmp_path / "config.yml")
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
     framework.load_builtin_hooks()
     agent = Agent(framework)
     agent.settings = AgentSettings.model_construct(model="openai:test", api_key="unused", api_base=None)
