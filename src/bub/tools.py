@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import contextvars
 import inspect
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Protocol, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, validate_call
@@ -238,33 +236,6 @@ class _FailedToolResult:
     result: Any = None
 
 
-class ToolCallReporter(Protocol):
-    def start(self, name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Awaitable[None] | None: ...
-
-    def success(self, name: str, result: Any, elapsed_ms: float) -> Awaitable[None] | None: ...
-
-    def error(self, name: str, error: BaseException, elapsed_ms: float) -> Awaitable[None] | None: ...
-
-
-_TOOL_CALL_REPORTER: contextvars.ContextVar[ToolCallReporter | None] = contextvars.ContextVar(
-    "bub_tool_call_reporter", default=None
-)
-
-
-@contextlib.contextmanager
-def tool_call_reporter(reporter: ToolCallReporter):
-    token = _TOOL_CALL_REPORTER.set(reporter)
-    try:
-        yield
-    finally:
-        _TOOL_CALL_REPORTER.reset(token)
-
-
-async def _await_report(report: Awaitable[None] | None) -> None:
-    if report is not None:
-        await report
-
-
 class ToolExecutor:
     """Execute already-resolved Bub tool invocations."""
 
@@ -471,30 +442,20 @@ def _add_logging(tool: Tool) -> Tool:
         call_kwargs = kwargs.copy()
         if tool.context:
             call_kwargs.pop("context", None)
-        reporter = _TOOL_CALL_REPORTER.get()
-        if reporter is None:
-            _log_tool_call(tool.name, args, call_kwargs)
-        else:
-            await _await_report(reporter.start(tool.name, args, call_kwargs))
+        _log_tool_call(tool.name, args, call_kwargs)
         start = time.monotonic()
 
         try:
             result = handler(*args, **kwargs)
             if inspect.isawaitable(result):
                 result = await result
-        except Exception as exc:
+        except Exception:
             elapsed_time = (time.monotonic() - start) * 1000
-            if reporter is None:
-                logger.exception("tool.call.error name={} elapsed_time={:.2f}ms", tool.name, elapsed_time)
-            else:
-                await _await_report(reporter.error(tool.name, exc, elapsed_time))
+            logger.exception("tool.call.error name={} elapsed_time={:.2f}ms", tool.name, elapsed_time)
             raise
         else:
             elapsed_time = (time.monotonic() - start) * 1000
-            if reporter is None:
-                logger.info("tool.call.success name={} elapsed_time={:.2f}ms", tool.name, elapsed_time)
-            else:
-                await _await_report(reporter.success(tool.name, result, elapsed_time))
+            logger.info("tool.call.success name={} elapsed_time={:.2f}ms", tool.name, elapsed_time)
             return result
 
     return replace(tool, handler=wrapped)

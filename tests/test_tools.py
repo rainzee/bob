@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 from pydantic import BaseModel
 
-from bub.tools import Tool, model_tools, tool, tool_call_reporter
+from bub.tools import Tool, model_tools, tool
 
 
 class EchoInput(BaseModel):
@@ -117,23 +117,12 @@ async def test_tool_wrapper_logs_failures_before_reraising(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_tool_wrapper_uses_reporter_instead_of_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_tool_wrapper_reports_every_call_through_logs(monkeypatch: pytest.MonkeyPatch) -> None:
     tool_name = "tests.reported_tool"
     logged: list[str] = []
-    reported: list[tuple[str, str, Any]] = []
 
     def record_log(message: str, *args: Any, **kwargs: Any) -> None:
         logged.append(message.format(*args, **kwargs))
-
-    class Reporter:
-        def start(self, name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-            reported.append(("start", name, {"args": args, "kwargs": kwargs}))
-
-        def success(self, name: str, result: Any, elapsed_ms: float) -> None:
-            reported.append(("success", name, {"result": result, "elapsed_ms": elapsed_ms}))
-
-        def error(self, name: str, error: BaseException, elapsed_ms: float) -> None:
-            reported.append(("error", name, {"error": error, "elapsed_ms": elapsed_ms}))
 
     monkeypatch.setattr(logger, "info", record_log)
     monkeypatch.setattr(logger, "exception", record_log)
@@ -142,15 +131,10 @@ async def test_tool_wrapper_uses_reporter_instead_of_logs(monkeypatch: pytest.Mo
     def reported_tool(value: str) -> str:
         return value.upper()
 
-    with tool_call_reporter(Reporter()):
-        result = await reported_tool.run("hello")
+    assert await reported_tool.run("hello") == "HELLO"
 
-    assert result == "HELLO"
-    assert logged == []
-    assert reported[0] == ("start", tool_name, {"args": ("hello",), "kwargs": {}})
-    assert reported[1][0] == "success"
-    assert reported[1][1] == tool_name
-    assert reported[1][2]["result"] == "HELLO"
+    assert logged[0] == f'tool.call.start name={tool_name} {{ "hello" }}'
+    assert logged[1].startswith(f"tool.call.success name={tool_name} elapsed_time=")
 
 
 @pytest.mark.asyncio
