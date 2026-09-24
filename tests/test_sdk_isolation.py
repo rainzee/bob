@@ -6,7 +6,6 @@ import pytest
 from bub.builtin import Agent
 from bub.builtin.hooks import BuiltinHooks
 from bub.builtin.tools import run_subagent
-from bub.configure import Config
 from bub.framework import BubFramework
 from bub.store import InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent
@@ -24,7 +23,7 @@ def _reply() -> AsyncStreamEvents:
 
 @pytest.fixture
 def framework(tmp_path: Path) -> BubFramework:
-    framework = BubFramework(workspace=tmp_path, home=tmp_path, config=Config({"model": "test:model"}))
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
     framework.add_hooks(BuiltinHooks(framework).hooks)
     return framework
 
@@ -35,12 +34,12 @@ def framework(tmp_path: Path) -> BubFramework:
 async def test_sdk_recovers_only_its_store_and_honors_explicit_overrides(
     framework: BubFramework, has_saved_state: bool, override: bool
 ) -> None:
-    builtin = BuiltinHooks(framework)
-    builtin_tape = builtin._get_agent().tape.session_tape("shared", framework.workspace)
-    await builtin_tape.append_event("model_switch", {"model": "test:other"})
-    await builtin_tape.append_event("reasoning_effort_switch", {"reasoning_effort": "low"})
+    other = Agent(framework, model="test:other", tools=[], tape_store=InMemoryTapeStore(), skill_dirs=[])
+    other_tape = other.tape.session_tape("shared", framework.workspace)
+    await other_tape.append_event("model_switch", {"model": "test:other"})
+    await other_tape.append_event("reasoning_effort_switch", {"reasoning_effort": "low"})
 
-    agent = Agent(framework, tools=[], tape_store=InMemoryTapeStore(), skill_dirs=[])
+    agent = Agent(framework, model="test:model", tools=[], tape_store=InMemoryTapeStore(), skill_dirs=[])
     tape = agent.tape.session_tape("shared", framework.workspace)
     if has_saved_state:
         await tape.append_event("model_switch", {"model": "test:saved"})
@@ -56,7 +55,7 @@ async def test_sdk_recovers_only_its_store_and_honors_explicit_overrides(
     )
     assert [event.kind async for event in stream] == ["text", "final"]
     call = runner.call_args.kwargs
-    expected_model = "test:saved" if has_saved_state else agent.settings.model
+    expected_model = "test:saved" if has_saved_state else agent.model_runner.model
     assert call["model"] == ("test:explicit" if override else expected_model)
     state = call["tape"].context.state
     assert state.get("reasoning_effort") == ("medium" if override else "high" if has_saved_state else None)
@@ -78,7 +77,7 @@ def test_instance_tool_names_resolve_aliases_and_exclusions_from_one_index() -> 
 @pytest.mark.asyncio
 async def test_agent_allowlist_accepts_unregistered_instance_tool(framework: BubFramework) -> None:
     tool = Tool.from_callable(lambda: "found", name="sdk.lookup")
-    agent = Agent(framework, tools=[tool], tape_store=InMemoryTapeStore(), skill_dirs=[])
+    agent = Agent(framework, model="test:model", tools=[tool], tape_store=InMemoryTapeStore(), skill_dirs=[])
     runner = Mock(side_effect=lambda **kwargs: _reply())
     agent.model_runner.run = runner
     stream = await agent.run_stream(session_id="sdk", prompt="lookup", allowed_tools=[" SDK_LOOKUP "])
@@ -90,7 +89,9 @@ async def test_agent_allowlist_accepts_unregistered_instance_tool(framework: Bub
 @pytest.mark.parametrize("allowed_tools", [None, ["SDK_LOOKUP"]])
 async def test_subagent_uses_parent_instance_tools(framework: BubFramework, allowed_tools: list[str] | None) -> None:
     tool = Tool.from_callable(lambda: "found", name="sdk.lookup")
-    agent = Agent(framework, tools=[tool, run_subagent], tape_store=InMemoryTapeStore(), skill_dirs=[])
+    agent = Agent(
+        framework, model="test:model", tools=[tool, run_subagent], tape_store=InMemoryTapeStore(), skill_dirs=[]
+    )
     runner = Mock(side_effect=lambda **kwargs: _reply())
     agent.model_runner.run = runner
     tape: Tape = agent.tape.session_tape("parent", framework.workspace)

@@ -28,13 +28,22 @@ from any_llm.types.completion import (
 from loguru import logger
 from pydantic import TypeAdapter, ValidationError
 
-from bub.builtin.settings import AgentSettings, ModelCandidate
 from bub.errors import BubError, ErrorKind
 from bub.hooks import Hooks, LlmCallDecision, LlmCallRequest, LlmCallResult
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape
 from bub.tools import Tool, ToolContext, ToolExecutor
 from bub.tracing import Span, current_span, event
+
+
+@dataclass(frozen=True)
+class ModelCandidate:
+    """一次尝试使用的模型: 解析出的 provider 与 model_id, 以及调用方写的原名"""
+
+    provider: LLMProvider
+    model_id: str
+    name: str
+
 
 TOOL_ARGUMENTS_ADAPTER = TypeAdapter(dict[str, Any])
 CompletionResult = ChatCompletion | ParsedChatCompletion[Any] | AsyncIterator[ChatCompletionChunk]
@@ -53,6 +62,12 @@ _AUDIO_FORMAT_TO_MIME_TYPE = {
 
 def _audio_mime_type(audio_format: str) -> str:
     return _AUDIO_FORMAT_TO_MIME_TYPE.get(audio_format, f"audio/{audio_format}")
+
+
+def _provider_value(value: str | dict[str, str] | None, provider: str) -> str | None:
+    if isinstance(value, dict):
+        return value.get(provider)
+    return value
 
 
 def _extra_options(llm: AnyLLM, *, stream: bool) -> dict[str, Any]:
@@ -107,13 +122,66 @@ def _adapt_messages_for_provider(messages: list[dict[str, Any]], provider: LLMPr
 
 
 class ModelRunner:
-    def __init__(self, settings: AgentSettings, hooks: Hooks | None = None) -> None:
-        self.settings = settings
+    def __init__(
+        self,
+        *,
+        model: str,
+        fallback_models: Iterable[str] = (),
+        api_key: str | dict[str, str] | None = None,
+        api_base: str | dict[str, str] | None = None,
+        client_args: dict[str, Any] | None = None,
+        completion_args: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+        hooks: Hooks | None = None,
+    ) -> None:
+        """Create a runner that builds provider clients and streams one completion at a time.
+
+        Args:
+            model: Default ``provider:model_id`` for turns that do not override it.
+            fallback_models: Additional models tried in order when the primary call fails.
+            api_key: Provider key, or a mapping keyed by provider name.
+            api_base: Provider endpoint, or a mapping keyed by provider name.
+            client_args: Extra keyword arguments for the underlying client constructor.
+            completion_args: Extra keyword arguments added to every completion call.
+            max_tokens: Per-call output cap; None leaves it to the provider.
+            timeout_seconds: Per-call timeout; None means no timeout is applied.
+            hooks: Callbacks run around each model call.
+        """
+        self.model = model
+        self.fallback_models = tuple(fallback_models)
+        self.api_key = api_key
+        self.api_base = api_base
+        self.client_args = dict(client_args or {})
+        self.completion_args = dict(completion_args or {})
+        self.max_tokens = max_tokens
+        self.timeout_seconds = timeout_seconds
         self.hooks = hooks
 
+    def model_candidates(self, model: str) -> list[ModelCandidate]:
+        """Return the model to try first followed by the fallbacks, in order."""
+
+        names = [model]
+        if model == self.model:
+            names.extend(self.fallback_models)
+        candidates: list[ModelCandidate] = []
+        for name in names:
+            provider, model_id = AnyLLM.split_model_provider(name)
+            candidates.append(ModelCandidate(provider=provider, model_id=model_id, name=name))
+        return candidates
+
+    def model_client_kwargs(self, provider: str) -> dict[str, Any]:
+        """Return the client constructor arguments for one provider."""
+
+        return {
+            **self.client_args,
+            "api_key": _provider_value(self.api_key, provider),
+            "api_base": _provider_value(self.api_base, provider),
+        }
+
     def iter_llm_clients(self, model: str) -> Iterator[tuple[ModelCandidate, AnyLLM]]:
-        for candidate in self.settings.model_candidates(model):
-            client_kwargs = self.settings.model_client_kwargs(candidate.provider)
+        for candidate in self.model_candidates(model):
+            client_kwargs = self.model_client_kwargs(candidate.provider)
             yield (
                 candidate,
                 self.create_llm_client(candidate, client_kwargs),
@@ -146,14 +214,16 @@ class ModelRunner:
                 streaming = llm.SUPPORTS_COMPLETION_STREAMING
                 completion_messages = _adapt_messages_for_provider(messages, candidate.provider)
                 completion_kwargs = {
-                    **self.settings.completion_args,
+                    **self.completion_args,
                     **_extra_options(llm, stream=streaming),
                     "model": candidate.model_id,
                     "messages": completion_messages,
                     "tools": tool_payloads,
-                    "max_tokens": max_tokens if max_tokens is not None else self.settings.max_tokens,
                     "stream": streaming,
                 }
+                resolved_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+                if resolved_max_tokens is not None:
+                    completion_kwargs["max_tokens"] = resolved_max_tokens
                 if reasoning_effort is not None:
                     completion_kwargs["reasoning_effort"] = reasoning_effort
                 return cast("CompletionResult", await llm.acompletion(**completion_kwargs))
@@ -193,7 +263,7 @@ class ModelRunner:
                 model=model,
                 messages=messages,
                 tool_names=tuple(tool_item.name for tool_item in tools),
-                max_tokens=self.settings.max_tokens,
+                max_tokens=self.max_tokens,
             )
             decision: LlmCallDecision | None = None
             if self.hooks is not None:
@@ -311,7 +381,7 @@ class ModelRunner:
             })
 
         async def iterator() -> AsyncGenerator[StreamEvent, None]:
-            async with asyncio.timeout(self.settings.model_timeout_seconds):
+            async with asyncio.timeout(self.timeout_seconds):
                 completion = await self.completion_response(
                     model=request.model,
                     messages=list(request.messages),

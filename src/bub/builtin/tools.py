@@ -189,7 +189,7 @@ def skill_describe(name: str | None = None, *, context: ToolContext) -> str:
     if name.casefold() not in skill_index:
         return "(no such skill)"
     skill = skill_index[name.casefold()]
-    return f"Location: {skill.location}\n---\n{skill.body(agent.framework.config) or '(no content)'}"
+    return f"Location: {skill.location}\n---\n{skill.body() or '(no content)'}"
 
 
 @tool(context=True, name="tape.info")

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Collection, Iterable
+from collections.abc import AsyncGenerator, AsyncIterator, Collection, Iterable, Mapping
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -16,7 +17,6 @@ from loguru import logger
 
 from bub.builtin.context import default_tape_context
 from bub.builtin.model_runner import ModelRunner
-from bub.builtin.settings import AgentSettings
 from bub.framework import BubFramework
 from bub.hooks import Hooks
 from bub.sidecars import TapeSidecar
@@ -39,6 +39,15 @@ class Agent:
         self,
         framework: BubFramework,
         *,
+        model: str,
+        fallback_models: Collection[str] = (),
+        api_key: str | dict[str, str] | None = None,
+        api_base: str | dict[str, str] | None = None,
+        client_args: Mapping[str, Any] | None = None,
+        completion_args: Mapping[str, Any] | None = None,
+        max_tokens: int | None = None,
+        max_steps: int | None = None,
+        model_timeout_seconds: float | None = None,
         tools: Collection[Tool] = (),
         tape_store: TapeStore | AsyncTapeStore | None = None,
         skill_dirs: Collection[Path] = (),
@@ -46,11 +55,19 @@ class Agent:
         sidecars: Collection[TapeSidecar] = (),
         hooks: Hooks | None = None,
     ) -> None:
-        """Create a builtin agent with instance-specific tools, skills, and storage.
+        """Create a builtin agent from explicitly passed model, tool and storage parameters.
 
         Args:
-            framework: Configured hook runtime supplying prompts, tape context,
-                interception hooks, and optional shared resources.
+            framework: Configured runtime supplying paths, resources and callbacks.
+            model: Default ``provider:model_id`` for turns that do not override it.
+            fallback_models: Additional models tried in order when the primary call fails.
+            api_key: Provider key, or a mapping keyed by provider name.
+            api_base: Provider endpoint, or a mapping keyed by provider name.
+            client_args: Extra keyword arguments for the underlying client constructor.
+            completion_args: Extra keyword arguments added to every model call.
+            max_tokens: Per-call output cap; None leaves it to the provider.
+            max_steps: Tool-loop step limit; None means no limit.
+            model_timeout_seconds: Per-call timeout; None means no timeout is applied.
             tools: Tools available to this instance. An empty collection means the
                 agent has no tools.
             tape_store: Explicit store, preferred over the framework's active
@@ -61,10 +78,9 @@ class Agent:
                 builtin chat-replay selection.
             sidecars: Extra sidecars mounted after the framework's own.
             hooks: Extra callbacks for this agent, appended after the framework's.
-        Model settings come from the framework's configuration. The caller owns
-        the lifecycle of an explicitly supplied store.
+
+        The caller owns the lifecycle of an explicitly supplied store.
         """
-        self.settings = framework.config.ensure(AgentSettings)
         self.framework = framework
         self.tools = {tool.name: tool for tool in tools}
         self.tape_store = tape_store
@@ -72,7 +88,18 @@ class Agent:
         self.tape_context = tape_context if tape_context is not None else default_tape_context()
         self.sidecars = tuple(sidecars or ())
         self.hooks = framework.hooks + (hooks or Hooks())
-        self.model_runner = ModelRunner(self.settings, hooks=self.hooks)
+        self.max_steps = max_steps
+        self.model_runner = ModelRunner(
+            model=model,
+            fallback_models=fallback_models,
+            api_key=api_key,
+            api_base=api_base,
+            client_args=dict(client_args or {}),
+            completion_args=dict(completion_args or {}),
+            max_tokens=max_tokens,
+            timeout_seconds=model_timeout_seconds,
+            hooks=self.hooks,
+        )
 
     @cached_property
     def tape(self) -> Tape:
@@ -232,7 +259,7 @@ class Agent:
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncStreamEvents:
         next_prompt: str | list[dict] = prompt
-        display_model = model or self.settings.model
+        display_model = model or self.model_runner.model
         await tape.append_event(
             "loop.start",
             {
@@ -262,12 +289,14 @@ class Agent:
         allowed_skills: Collection[str] | None = None,
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
-        display_model = model or self.settings.model
+        display_model = model or self.model_runner.model
         prompt_text = prompt if isinstance(prompt, str) else _extract_text_from_parts(prompt)
         # Only the first step carries the caller's message. Later steps continue on
         # the tape, which already ends with the assistant tool calls and their results.
         next_prompt: str | list[dict] | None = prompt
-        for step in range(1, self.settings.max_steps + 1):
+        # max_steps=None means unbounded; sys.maxsize is the range sentinel for that.
+        step_limit = sys.maxsize if self.max_steps is None else self.max_steps
+        for step in range(1, step_limit + 1):
             start = time.monotonic()
             should_continue = False
             logger.info("loop.step step={} tape={} model={}", step, tape.name, display_model)
@@ -339,7 +368,7 @@ class Agent:
                 },
             )
 
-        raise RuntimeError(f"max_steps_reached={self.settings.max_steps}")
+        raise RuntimeError(f"max_steps_reached={self.max_steps}")
 
     def _load_skills_prompt(self, prompt: str, allowed_skills: set[str] | None = None) -> str:
         skill_index = {
@@ -351,7 +380,6 @@ class Agent:
         return render_skills_prompt(
             list(skill_index.values()),
             expanded_skills=expanded_skills,
-            config=self.framework.config,
         )
 
     async def _run_once(
@@ -397,7 +425,7 @@ class Agent:
         system_prompt = await self._system_prompt(
             prompt_text, state=tape.context.state, allowed_skills=allowed_skills, tools=tools
         )
-        resolved_model = model or self.settings.model
+        resolved_model = model or self.model_runner.model
 
         model_tools_for_call = model_tools(tools)
         if (span := current_span()) and span.recording:

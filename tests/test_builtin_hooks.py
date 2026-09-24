@@ -12,7 +12,6 @@ from bub.builtin.hooks import (
     Battery,
     BuiltinHooks,
 )
-from bub.configure import Config
 from bub.framework import BubFramework
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent
@@ -60,15 +59,10 @@ def _raise_value_error() -> None:
     raise ValueError("boom")
 
 
-def _build_impl(tmp_path: Path, config: Config | None = None) -> tuple[BubFramework, BuiltinHooks, FakeAgent]:
-    framework = BubFramework(
-        workspace=tmp_path,
-        home=tmp_path,
-        config=config if config is not None else Config({"model": "test:model"}),
-    )
+def _build_impl(tmp_path: Path) -> tuple[BubFramework, BuiltinHooks, FakeAgent]:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
     impl = BuiltinHooks(framework)
     agent = FakeAgent(tmp_path)
-    impl._agent = agent
     return framework, impl, agent
 
 
@@ -96,7 +90,7 @@ async def test_load_state_injects_model_recorded_on_session_tape(tmp_path: Path)
     session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
     await session.append_event("model_switch", {"model": "openai:gpt-4o"})
 
-    state = await impl.load_state(session_id="resolved-session", state={})
+    state = await impl.load_state(session_id="resolved-session", state={"_runtime_agent": agent})
 
     assert state["model"] == "openai:gpt-4o"
 
@@ -107,17 +101,25 @@ async def test_load_state_injects_reasoning_effort_recorded_on_session_tape(tmp_
     session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
     await session.append_event("reasoning_effort_switch", {"reasoning_effort": "high"})
 
-    state = await impl.load_state(session_id="resolved-session", state={})
+    state = await impl.load_state(session_id="resolved-session", state={"_runtime_agent": agent})
 
     assert state["reasoning_effort"] == "high"
+
+
+def test_load_state_requires_the_running_agent_in_state(tmp_path: Path) -> None:
+    _, impl, _ = _build_impl(tmp_path)
+    import asyncio
+
+    with pytest.raises(TypeError, match="_runtime_agent"):
+        asyncio.run(impl.load_state(session_id="s", state={}))
 
 
 @pytest.mark.asyncio
 async def test_load_state_does_not_inject_model_for_unknown_session(tmp_path: Path) -> None:
     """A session with nothing recorded on its tape must not inherit any model (no leakage)."""
-    _, impl, _ = _build_impl(tmp_path)
+    _, impl, agent = _build_impl(tmp_path)
 
-    state = await impl.load_state(session_id="fresh-session", state={})
+    state = await impl.load_state(session_id="fresh-session", state={"_runtime_agent": agent})
 
     assert "model" not in state
 
@@ -151,14 +153,14 @@ def test_system_prompt_ignores_missing_agents_file(tmp_path: Path) -> None:
 
 
 def test_battery_provides_file_tape_store(tmp_path: Path) -> None:
-    store = Battery(home=tmp_path, config=Config()).tape_store
+    store = Battery(home=tmp_path).tape_store
 
     assert isinstance(store, FileTapeStore)
     assert store._directory == tmp_path / "tapes"
 
 
 def test_battery_exposes_store_sidecars_lifespans_and_hooks(tmp_path: Path) -> None:
-    battery = Battery(home=tmp_path, config=Config())
+    battery = Battery(home=tmp_path)
 
     assert [sidecar.name for sidecar in battery.sidecars] == ["spill"]
     assert battery.lifespans == (battery.shell_manager.lifespan,)
@@ -175,37 +177,43 @@ def test_builtin_hooks_expose_the_three_seams(tmp_path: Path) -> None:
 
 
 def test_before_tool_call_ignores_known_tool(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
+    _, impl, agent = _build_impl(tmp_path)
     import asyncio
 
     from bub.hooks import ToolCall
 
     async def _do():
-        return await impl.before_tool_call(ToolCall(run_id="r", tool="bash", arguments={}), state={})
+        return await impl.before_tool_call(
+            ToolCall(run_id="r", tool="bash", arguments={}), state={"_runtime_agent": agent}
+        )
 
     assert asyncio.run(_do()) is None
 
 
 def test_before_tool_call_ignores_known_model_alias(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
+    _, impl, agent = _build_impl(tmp_path)
     import asyncio
 
     from bub.hooks import ToolCall
 
     async def _do():
-        return await impl.before_tool_call(ToolCall(run_id="r", tool="bash_output", arguments={}), state={})
+        return await impl.before_tool_call(
+            ToolCall(run_id="r", tool="bash_output", arguments={}), state={"_runtime_agent": agent}
+        )
 
     assert asyncio.run(_do()) is None
 
 
 def test_before_tool_call_recovers_unknown_tool(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
+    _, impl, agent = _build_impl(tmp_path)
     import asyncio
 
     from bub.hooks import ToolCall
 
     async def _do():
-        return await impl.before_tool_call(ToolCall(run_id="r", tool="tepadr", arguments={}), state={})
+        return await impl.before_tool_call(
+            ToolCall(run_id="r", tool="tepadr", arguments={}), state={"_runtime_agent": agent}
+        )
 
     decision = asyncio.run(_do())
     assert decision is not None and decision.action == "replace"
@@ -214,13 +222,15 @@ def test_before_tool_call_recovers_unknown_tool(tmp_path: Path) -> None:
 
 
 def test_before_tool_call_suggests_close_model_tool_name(tmp_path: Path) -> None:
-    _, impl, _ = _build_impl(tmp_path)
+    _, impl, agent = _build_impl(tmp_path)
     import asyncio
 
     from bub.hooks import ToolCall
 
     async def _do():
-        return await impl.before_tool_call(ToolCall(run_id="r", tool="fs_reed", arguments={}), state={})
+        return await impl.before_tool_call(
+            ToolCall(run_id="r", tool="fs_reed", arguments={}), state={"_runtime_agent": agent}
+        )
 
     decision = asyncio.run(_do())
     assert decision is not None

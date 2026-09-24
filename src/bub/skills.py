@@ -12,12 +12,8 @@ from typing import Any
 
 import yaml
 
-from bub.configure import Config
-
-PROJECT_SKILLS_DIR = ".agents/skills"
 SKILL_FILE_NAME = "SKILL.md"
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-CONFIG_TEMPLATE_PATTERN = re.compile(r"\$\{\s*config\.([a-zA-Z0-9_.-]+)\s*\}")
 
 
 @dataclass(frozen=True)
@@ -29,14 +25,13 @@ class SkillMetadata:
     location: Path
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def body(self, config: Config | None = None) -> str:
+    def body(self) -> str:
         front_matter_pattern = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
         try:
             template_content = self.location.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
-        raw_content = front_matter_pattern.sub("", template_content, count=1).strip()
-        content = _render_config_templates(raw_content, config)
+        content = front_matter_pattern.sub("", template_content, count=1).strip()
         return string.Template(content).safe_substitute({
             "SKILL_DIR": str(self.location.parent),
             "PYTHON": sys.executable,
@@ -61,22 +56,6 @@ def discover_skills(skill_dirs: Collection[Path]) -> list[SkillMetadata]:
                 skills_by_name[key] = metadata
 
     return sorted(skills_by_name.values(), key=lambda item: item.name.casefold())
-
-
-def _render_config_templates(content: str, config: Config | None) -> str:
-    def replace(match: re.Match[str]) -> str:
-        if config is None:
-            return match.group(0)
-        value = config.get_value(match.group(1), default="")
-        if isinstance(value, str):
-            return value
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, int | float):
-            return str(value)
-        return yaml.safe_dump(value, sort_keys=False).strip()
-
-    return CONFIG_TEMPLATE_PATTERN.sub(replace, content)
 
 
 def _read_skill(skill_dir: Path) -> SkillMetadata | None:
@@ -156,9 +135,7 @@ def _is_valid_metadata_field(metadata_field: object) -> bool:
     return all(isinstance(key, str) and isinstance(value, str) for key, value in metadata_field.items())
 
 
-def render_skills_prompt(
-    skills: list[SkillMetadata], expanded_skills: Collection[str] = (), config: Config | None = None
-) -> str:
+def render_skills_prompt(skills: list[SkillMetadata], expanded_skills: Collection[str] = ()) -> str:
     if not skills:
         return ""
     lines = ["<available_skills>"]
@@ -166,7 +143,7 @@ def render_skills_prompt(
         line = f"- {skill.name}: {skill.description}"
         if skill.name in expanded_skills:
             line += f"\n  Location: {skill.location}"
-            body = skill.body(config)
+            body = skill.body()
             if body:
                 line += f"\n{body}"
         lines.append(line)

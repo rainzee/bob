@@ -6,7 +6,6 @@ import contextlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from bub.configure import Config
 from bub.hooks import Hooks
 from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
@@ -15,23 +14,21 @@ from bub.utils import LifespanFactory, maybe_context_manager
 
 
 class BubFramework:
-    """Composition root: explicit paths, configuration, resources and callbacks
+    """Composition root: explicit paths, resources and callbacks
 
     The host assembles the runtime by hand -- there is no registry, no discovery and
     no name lookup. Every contribution goes through one of the named slots below.
     """
 
-    def __init__(self, *, workspace: Path, home: Path, config: Config | None = None) -> None:
-        """Create a runtime from explicitly configured paths and configuration.
+    def __init__(self, *, workspace: Path, home: Path) -> None:
+        """Create a runtime from explicitly configured paths.
 
         Args:
             workspace: Directory turns and skill discovery resolve against.
             home: Directory the runtime may write tapes under.
-            config: Explicit configuration; defaults to empty configuration.
         """
         self.workspace = workspace.expanduser().resolve()
         self.home = home.expanduser().resolve()
-        self.config = config if config is not None else Config()
         self.hooks = Hooks()
         self._tape_store: TapeStore | AsyncTapeStore | None = None
         self._active_tape_store: TapeStore | AsyncTapeStore | None = None

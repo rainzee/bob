@@ -7,7 +7,6 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
 
 from bub.builtin.agent import Agent
-from bub.configure import Config, Settings
 from bub.framework import BubFramework
 from bub.hooks import Hooks
 from bub.tools import Tool, ToolContext, tool
@@ -15,9 +14,7 @@ from bub.tools import Tool, ToolContext, tool
 __all__ = [
     "Agent",
     "BubFramework",
-    "Config",
     "Hooks",
-    "Settings",
     "Tool",
     "ToolContext",
     "tool",

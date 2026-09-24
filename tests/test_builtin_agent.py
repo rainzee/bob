@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncGenerator, AsyncIterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -9,10 +10,10 @@ import pytest
 from any_llm.types.completion import ChatCompletionChunk
 
 import bub.builtin.tools  # noqa: F401  — registers builtin tools (incl. `model`)
+from bub import BubFramework
 from bub.builtin import battery_tools
 from bub.builtin.agent import Agent
 from bub.builtin.model_runner import ModelRunner
-from bub.builtin.settings import AgentSettings
 from bub.errors import BubError
 from bub.hooks import Hooks
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
@@ -25,8 +26,8 @@ from bub.tools import tool
 
 
 class _FakeModelRunner(ModelRunner):
-    def __init__(self, settings: AgentSettings) -> None:
-        super().__init__(settings)
+    def __init__(self, **options: Any) -> None:
+        super().__init__(model="test:model", **options)
         self.completion_kwargs: dict[str, Any] | None = None
 
     async def completion_response(self, **kwargs: Any) -> AsyncIterator[ChatCompletionChunk]:
@@ -41,10 +42,9 @@ def _make_agent() -> Agent:
     framework.hooks = Hooks()
     framework.get_tape_sidecars.return_value = ()
 
-    with patch.object(Agent, "__init__", lambda self, fw: None):
+    with patch.object(Agent, "__init__", lambda self, fw, **kwargs: None):
         agent = Agent.__new__(Agent)
 
-    agent.settings = AgentSettings.model_construct(model="test:model", api_key="k", api_base="b", client_args={})
     agent.framework = framework
     agent.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
     agent.tape_store = None
@@ -52,7 +52,8 @@ def _make_agent() -> Agent:
     agent.tape_context = TapeContext(state={})
     agent.sidecars = ()
     agent.hooks = Hooks()
-    agent.model_runner = _FakeModelRunner(agent.settings)
+    agent.max_steps = None
+    agent.model_runner = _FakeModelRunner(api_key="k", api_base="b", client_args={})
     return agent
 
 
@@ -292,8 +293,8 @@ async def test_agent_loop_continues_without_injecting_a_user_message() -> None:
 async def test_agent_run_model_override_does_not_mutate_default() -> None:
     """A per-call model override must not leak into the agent's configured model.
 
-    The override is resolved per turn (``model or self.settings.model``) and
-    forwarded to any-llm; it must never be written back to ``settings.model``.
+    The override is resolved per turn (``model or self.model_runner.model``) and
+    forwarded to any-llm; it must never be written back to the runner's model.
     This is the agent-layer half of the guarantee that a session-scoped model
     switch (state['model'] -> run_stream(model=...)) cannot bleed across
     sessions the way a process-global env var would.
@@ -301,7 +302,7 @@ async def test_agent_run_model_override_does_not_mutate_default() -> None:
     agent = _make_agent()
     fork_capture = _ForkCapture()
     agent.tape = _FakeTapeFactory(fork_capture)  # type: ignore[assignment]
-    default_model = agent.settings.model
+    default_model = agent.model_runner.model
 
     result = await agent.run_stream(
         session_id="user/s1",
@@ -314,7 +315,7 @@ async def test_agent_run_model_override_does_not_mutate_default() -> None:
     completion_kwargs = _model_runner(agent).completion_kwargs
     assert completion_kwargs is not None
     assert completion_kwargs["model"] == "openai:gpt-4o"
-    assert agent.settings.model == default_model
+    assert agent.model_runner.model == default_model
 
 
 @pytest.mark.asyncio
@@ -369,3 +370,18 @@ async def test_agent_run_rejects_unknown_allowed_tools() -> None:
 
     with pytest.raises(ValueError, match="tests_missing_agent_tool"):
         [event async for event in stream]
+
+
+def test_agent_requires_an_explicit_model(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
+
+    with pytest.raises(TypeError, match="model"):
+        Agent(framework)
+
+
+def test_agent_has_no_settings_or_config_object(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
+    agent = Agent(framework, model="openai:test")
+
+    assert not hasattr(agent, "settings")
+    assert not hasattr(framework, "config")

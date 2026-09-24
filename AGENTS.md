@@ -4,15 +4,14 @@
 
 Core code lives under `src/`:
 
-- `src/bub/framework.py`: the composition root: paths, config, resource slots and `running()`.
+- `src/bub/framework.py`: the composition root: paths, resource slots and `running()`.
 - `src/bub/hooks.py`: the interception contracts, the `Hooks` value, and its per-slot execution semantics.
-- `src/bub/configure.py`: `Settings` (each class declares its own `section`), and the per-instance `Config`.
 - `src/bub/{streaming,errors}.py`: small kernel vocabulary owned by each concern.
-- `src/bub/builtin/`: builtin runtime, settings, tools, tape services, and provider adapters.
+- `src/bub/builtin/`: builtin runtime, tools, tape services, and provider adapters.
 - `src/bub/builtin/hooks.py`: `BuiltinHooks` (turn pipeline) and `Battery` (opt-in tape store, spill, shells).
 - `src/bub/skills.py` / `src/bub/tools.py`: skill discovery over explicit roots, and the tool framework.
 
-Everything is instance-scoped: no environment variables, no process-wide registries, no implicit user or working directories. The framework takes `workspace`, `home`, and an optional `Config`; the agent takes its tools and skill roots.
+Everything is instance-scoped: no environment variables, no process-wide registries, no implicit user or working directories, no configuration file. The framework takes `workspace` and `home`; the agent takes its model, credentials, tools and skill roots as plain keyword arguments. Settings only exist as the host's own dict.
 
 Tests live in `tests/`.
 
@@ -52,5 +51,5 @@ Tests live in `tests/`.
 
 ## Security & Configuration Tips
 
-- Never commit credentials. Pass them to `Config` from your own secret store or an untracked file.
-- Bub reads no environment variables; provider SDKs may still read their own (for example `OPENROUTER_API_KEY`) when a key is not supplied through configuration.
+- Never commit credentials. Pass them to `Agent` from your own secret store or an untracked file.
+- Bub reads no environment variables; provider SDKs may still read their own (for example `OPENROUTER_API_KEY`) when a key is not supplied through `Agent(api_key=...)`.

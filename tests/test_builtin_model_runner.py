@@ -18,12 +18,12 @@ from openai.types.chat.chat_completion_message_custom_tool_call import ChatCompl
 
 from bub.builtin.context import default_tape_context
 from bub.builtin.model_runner import (
+    ModelCandidate,
     ModelRunner,
     _adapt_messages_for_provider,
     parse_native_function_call,
     tool_invocation_from_native,
 )
-from bub.builtin.settings import AgentSettings, ModelCandidate
 from bub.errors import BubError, ErrorKind
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
 from bub.tape import Tape, TapeContext
@@ -129,7 +129,7 @@ async def test_tool_call_text_survives_into_next_request_after_tape_reload(
         requests.append(kwargs["messages"])
         return stream() if streaming else response
 
-    runner = ModelRunner(AgentSettings.model_construct(model="test-model", model_timeout_seconds=None))
+    runner = ModelRunner(model="test-model")
     monkeypatch.setattr(runner, "completion_response", complete)
     tools = [Tool(name="inspect", handler=lambda: "files found"), Tool(name="compare", handler=lambda: "bytes differ")]
     root = Tape(AsyncTapeStoreAdapter(FileTapeStore(tmp_path)), default_tape_context()).scoped("test-tape")
@@ -235,8 +235,8 @@ class _FakeStreamingAnthropicProvider(BaseAnthropicProvider):
 
 
 class _FakeOpenAIModelRunner(ModelRunner):
-    def __init__(self, settings: AgentSettings, llm: _FakeStreamingOpenAIProvider) -> None:
-        super().__init__(settings)
+    def __init__(self, llm: _FakeStreamingOpenAIProvider, **options: Any) -> None:
+        super().__init__(model="test:model", **options)
         self._llm = llm
 
     def iter_llm_clients(self, model: str) -> Iterator[tuple[ModelCandidate, _FakeStreamingOpenAIProvider]]:
@@ -244,8 +244,8 @@ class _FakeOpenAIModelRunner(ModelRunner):
 
 
 class _FakeAnthropicModelRunner(ModelRunner):
-    def __init__(self, settings: AgentSettings, llm: _FakeStreamingAnthropicProvider) -> None:
-        super().__init__(settings)
+    def __init__(self, llm: _FakeStreamingAnthropicProvider, **options: Any) -> None:
+        super().__init__(model="test:model", **options)
         self._llm = llm
 
     def iter_llm_clients(self, model: str) -> Iterator[tuple[ModelCandidate, _FakeStreamingAnthropicProvider]]:
@@ -261,10 +261,7 @@ async def test_streaming_openai_usage_is_requested_and_recorded_in_tape(
     store = InMemoryTapeStore()
     tape = Tape(AsyncTapeStoreAdapter(store), TapeContext()).scoped("test-tape")
     llm = _FakeStreamingOpenAIProvider()
-    runner = _FakeOpenAIModelRunner(
-        AgentSettings.model_construct(model="openai:gpt-test", max_tokens=100, model_timeout_seconds=None),
-        llm,
-    )
+    runner = _FakeOpenAIModelRunner(llm, max_tokens=100)
 
     await tape.ensure_bootstrap_anchor()
     events = [
@@ -299,10 +296,7 @@ async def test_streaming_openai_usage_is_requested_and_recorded_in_tape(
 @pytest.mark.asyncio
 async def test_anthropic_prompt_caching_is_requested() -> None:
     llm = _FakeStreamingAnthropicProvider()
-    runner = _FakeAnthropicModelRunner(
-        AgentSettings.model_construct(model="anthropic:claude-test", max_tokens=100),
-        llm,
-    )
+    runner = _FakeAnthropicModelRunner(llm, max_tokens=100)
 
     await runner.completion_response(model="claude-test", messages=[{"role": "user", "content": "hello"}], tools=[])
 
@@ -319,15 +313,7 @@ async def test_run_applies_reasoning_effort_from_tape_state(tmp_path: Path) -> N
         TapeContext(state={"reasoning_effort": "high"}),
     ).scoped("test-tape")
     llm = _FakeStreamingOpenAIProvider()
-    runner = _FakeOpenAIModelRunner(
-        AgentSettings.model_construct(
-            model="openai:gpt-test",
-            max_tokens=100,
-            model_timeout_seconds=None,
-            completion_args={"reasoning_effort": "low"},
-        ),
-        llm,
-    )
+    runner = _FakeOpenAIModelRunner(llm, completion_args={"reasoning_effort": "low"})
 
     await tape.ensure_bootstrap_anchor()
     events = runner.run(tape=tape, model="gpt-test", tools=[], system_prompt=None, prompt="hello")
@@ -341,18 +327,15 @@ async def test_run_applies_reasoning_effort_from_tape_state(tmp_path: Path) -> N
 async def test_completion_args_are_forwarded_without_overriding_managed_args() -> None:
     llm = _FakeStreamingOpenAIProvider()
     runner = _FakeOpenAIModelRunner(
-        AgentSettings.model_construct(
-            model="openai:gpt-test",
-            max_tokens=100,
-            completion_args={
-                "reasoning_effort": "high",
-                "model": "ignored-model",
-                "max_tokens": 1,
-                "stream": False,
-                "stream_options": {"include_usage": False},
-            },
-        ),
         llm,
+        max_tokens=100,
+        completion_args={
+            "reasoning_effort": "high",
+            "model": "ignored-model",
+            "max_tokens": 1,
+            "stream": False,
+            "stream_options": {"include_usage": False},
+        },
     )
 
     await runner.completion_response(
@@ -368,3 +351,76 @@ async def test_completion_args_are_forwarded_without_overriding_managed_args() -
     assert llm.completion_kwargs["max_tokens"] == 42
     assert llm.completion_kwargs["stream"] is True
     assert llm.completion_kwargs["stream_options"] == {"include_usage": True}
+
+
+def test_model_candidates_put_the_fallbacks_after_the_requested_model() -> None:
+    runner = ModelRunner(model="openai:gpt-test", fallback_models=["anthropic:claude-3", "gemini:small"])
+
+    assert [candidate.name for candidate in runner.model_candidates("openai:gpt-test")] == [
+        "openai:gpt-test",
+        "anthropic:claude-3",
+        "gemini:small",
+    ]
+    assert [candidate.model_id for candidate in runner.model_candidates("openai:gpt-test")] == [
+        "gpt-test",
+        "claude-3",
+        "small",
+    ]
+
+
+def test_fallbacks_do_not_apply_to_a_per_turn_model_override() -> None:
+    runner = ModelRunner(model="openai:gpt-test", fallback_models=["anthropic:claude-3"])
+
+    assert [candidate.name for candidate in runner.model_candidates("gemini:other")] == ["gemini:other"]
+
+
+def test_client_kwargs_resolve_single_and_per_provider_credentials() -> None:
+    runner = ModelRunner(
+        model="openai:gpt-test",
+        api_key="sk-shared",
+        api_base="https://shared.test",
+        client_args={"timeout": 5},
+    )
+
+    assert runner.model_client_kwargs("openai") == {
+        "timeout": 5,
+        "api_key": "sk-shared",
+        "api_base": "https://shared.test",
+    }
+
+    per_provider = ModelRunner(
+        model="openai:gpt-test",
+        api_key={"openai": "sk-openai", "anthropic": "sk-anthropic"},
+        api_base={"openai": "https://api.openai.test"},
+    )
+
+    assert per_provider.model_client_kwargs("openai") == {"api_key": "sk-openai", "api_base": "https://api.openai.test"}
+    assert per_provider.model_client_kwargs("anthropic") == {"api_key": "sk-anthropic", "api_base": None}
+    assert per_provider.model_client_kwargs("acme") == {"api_key": None, "api_base": None}
+
+
+def test_client_kwargs_resolve_enum_provider_values() -> None:
+    runner = ModelRunner(model="openai:gpt-test", api_key={LLMProvider.OPENAI: "sk-openai"})
+
+    assert runner.model_client_kwargs(LLMProvider.OPENAI)["api_key"] == "sk-openai"
+
+
+def test_missing_credentials_and_extra_args_default_to_empty() -> None:
+    runner = ModelRunner(model="openai:gpt-test", client_args=None, completion_args=None)
+
+    assert runner.api_key is None
+    assert runner.api_base is None
+    assert runner.client_args == {}
+    assert runner.completion_args == {}
+    assert runner.model_client_kwargs("openai") == {"api_key": None, "api_base": None}
+
+
+@pytest.mark.asyncio
+async def test_no_token_cap_is_sent_when_max_tokens_is_unset() -> None:
+    llm = _FakeStreamingOpenAIProvider()
+    runner = _FakeOpenAIModelRunner(llm)
+
+    await runner.completion_response(model="gpt-test", messages=[{"role": "user", "content": "hello"}], tools=[])
+
+    assert llm.completion_kwargs is not None
+    assert "max_tokens" not in llm.completion_kwargs

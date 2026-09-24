@@ -1,10 +1,8 @@
 from pathlib import Path
 
 import pytest
-from conftest import DemoSettings
 
 from bub.builtin.context import default_tape_context
-from bub.configure import Config
 from bub.skills import (
     SKILL_FILE_NAME,
     SkillMetadata,
@@ -47,26 +45,21 @@ def test_skill_metadata_body_strips_frontmatter(tmp_path: Path) -> None:
     assert metadata.body() == "Line 1\nLine 2"
 
 
-def test_skill_metadata_body_renders_config_templates(tmp_path: Path) -> None:
-    assert DemoSettings.__name__ == "DemoSettings"
-    skill_file = _write_skill(
-        tmp_path,
-        "demo-skill",
-        body='Token: "${config.demo.token}"\nSkill dir: $SKILL_DIR',
-    )
+def test_skill_metadata_body_expands_string_templates(tmp_path: Path) -> None:
+    skill_file = _write_skill(tmp_path, "demo-skill", body="Skill dir: $SKILL_DIR\nPython: $PYTHON")
     metadata = SkillMetadata(name="demo-skill", description="Demo", location=skill_file)
 
-    body = metadata.body(Config({"demo": {"token": "explicit-token"}}))
+    body = metadata.body()
 
-    assert 'Token: "explicit-token"' in body
     assert f"Skill dir: {tmp_path / 'demo-skill'}" in body
+    assert "Python: " in body
 
 
-def test_skill_metadata_body_without_config_leaves_templates_alone(tmp_path: Path) -> None:
-    skill_file = _write_skill(tmp_path, "demo-skill", body='Token: "${config.demo.token}"')
+def test_skill_metadata_body_leaves_unknown_placeholders_alone(tmp_path: Path) -> None:
+    skill_file = _write_skill(tmp_path, "demo-skill", body='Token: "$missing" and ${not-a-template}')
     metadata = SkillMetadata(name="demo-skill", description="Demo", location=skill_file)
 
-    assert metadata.body() == 'Token: "${config.demo.token}"'
+    assert metadata.body() == 'Token: "$missing" and ${not-a-template}'
 
 
 def test_read_skill_rejects_invalid_metadata_field_type(tmp_path: Path) -> None:

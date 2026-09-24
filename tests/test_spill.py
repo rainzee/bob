@@ -10,7 +10,6 @@ from bub.builtin.spill import (
     SPILL_READ_MODEL_NAME,
     SPILL_READ_TOOL_NAME,
     SPILL_SIDECAR_NAME,
-    SpillSettings,
     SpillStore,
     spill_read,
     spill_tool_result,
@@ -39,7 +38,7 @@ def _page_field(page: str, name: str) -> str:
 
 
 def _root_tape(store: TapeStore, *, threshold: int = 1) -> Tape:
-    spill = SpillStore(SpillSettings(threshold=threshold))
+    spill = SpillStore(threshold=threshold)
     return Tape(AsyncTapeStoreAdapter(store), default_tape_context(), sidecars=(spill,)).scoped("session")
 
 

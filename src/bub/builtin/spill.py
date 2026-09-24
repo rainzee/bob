@@ -5,12 +5,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import ClassVar
 
 from loguru import logger
-from pydantic import Field
 
-from bub.configure import Settings
 from bub.errors import BubError, ErrorKind
 from bub.hooks import ToolCall, ToolCallResult
 from bub.store import TapeQuery
@@ -57,18 +54,6 @@ async def spill_tool_result(call: ToolCall, result: ToolCallResult, state: TurnS
     )
     if isinstance(tool_result, str) or bounded_result != rendered_result:
         result.result = bounded_result
-
-
-class SpillSettings(Settings):
-    """溢出 sidecar 的配置"""
-
-    section: ClassVar[str] = "spill"
-
-    threshold: int = Field(
-        default=4096,
-        ge=0,
-        description="Estimated tokens (4 chars each) above which rendered tool results move to the spill sidecar.",
-    )
 
 
 def _chunk_anchor(handle: str, index: int) -> str:
@@ -143,7 +128,7 @@ class IncompleteSpillError(RuntimeError):
 class SpillStore:
     """Store spill chunks as ordinary entries in a sibling tape."""
 
-    settings: SpillSettings
+    threshold: int = 4096
     name: str = field(default=SPILL_SIDECAR_NAME, init=False)
 
     async def _record_write(self, tape: Tape, data: dict[str, object], *, run_id: str) -> None:
@@ -153,7 +138,7 @@ class SpillStore:
             logger.warning("spill write event failed run_id={} error={}", run_id, exc)
 
     async def spill_tool_result(self, tape: Tape, result: str, *, tool: str, run_id: str) -> str:
-        threshold = self.settings.threshold
+        threshold = self.threshold
         if threshold <= 0 or tool in {SPILL_READ_TOOL_NAME, SPILL_READ_MODEL_NAME} or len(result) < threshold * 4:
             return result
 

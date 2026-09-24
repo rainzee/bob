@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from bub.builtin.agent import Agent
-from bub.configure import Config
 from bub.framework import BubFramework
 from bub.hooks import Hooks, ToolCall, ToolCallDecision
 from bub.sidecars import TapeSidecar
@@ -27,7 +26,6 @@ class BuiltinHooks:
 
     def __init__(self, framework: BubFramework) -> None:
         self.framework = framework
-        self._agent: Agent | None = None
 
     @property
     def hooks(self) -> Hooks:
@@ -37,12 +35,14 @@ class BuiltinHooks:
             before_tool_call=[self.before_tool_call],
         )
 
-    def _get_agent(self, state: TurnState | None = None) -> Agent:
-        if state and "_runtime_agent" in state:
-            return cast("Agent", state["_runtime_agent"])
-        if self._agent is None:
-            self._agent = Agent(self.framework)
-        return self._agent
+    @staticmethod
+    def _current_agent(state: TurnState) -> Agent:
+        """Return the agent running this turn, which Agent.run_stream puts in the state"""
+
+        agent = state.get("_runtime_agent")
+        if agent is None:
+            raise TypeError("turn state has no _runtime_agent; run turns through Agent.run_stream")
+        return cast("Agent", agent)
 
     async def _recover_session_model(self, session_id: str, *, agent: Agent) -> str | None:
         """Recover the latest per-session model override recorded on the session tape.
@@ -72,9 +72,7 @@ class BuiltinHooks:
         return None
 
     async def load_state(self, session_id: str, state: TurnState) -> TurnState:
-        agent = state.get("_runtime_agent")
-        if not isinstance(agent, Agent):
-            agent = self._get_agent()
+        agent = self._current_agent(state)
         loaded: TurnState = {"session_id": session_id, "_runtime_agent": agent}
         # Carry over a previously recorded per-session model override from the
         # session tape. Only set when a prior turn actually recorded one, so a
@@ -106,7 +104,7 @@ class BuiltinHooks:
         """
         from bub.tools import model_tools
 
-        agent = self._get_agent(state)
+        agent = self._current_agent(state)
 
         available_tools = tuple(tool_item.name for tool_item in model_tools(agent.tools.values()))
         if call.tool in available_tools:
@@ -130,11 +128,18 @@ class Battery:
     store, sidecars and lifespans into the framework's matching slot.
     """
 
-    def __init__(self, *, home: Path, config: Config) -> None:
+    def __init__(self, *, home: Path, spill_threshold: int = 4096) -> None:
+        """Create the batteries under one directory.
+
+        Args:
+            home: Directory the file tape store keeps its JSONL tapes in.
+            spill_threshold: Estimated tokens (4 chars each) above which rendered
+                tool results move to the spill sidecar; 0 disables spilling.
+        """
         from bub.builtin.shell_manager import ShellManager
 
         self.home = home
-        self.config = config
+        self.spill_threshold = spill_threshold
         self.shell_manager = ShellManager()
 
     @property
@@ -152,9 +157,9 @@ class Battery:
 
     @property
     def sidecars(self) -> tuple[TapeSidecar, ...]:
-        from bub.builtin.spill import SpillSettings, SpillStore
+        from bub.builtin.spill import SpillStore
 
-        return (SpillStore(self.config.ensure(SpillSettings)),)
+        return (SpillStore(threshold=self.spill_threshold),)
 
     @property
     def lifespans(self) -> tuple[LifespanFactory, ...]:

@@ -4,10 +4,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from conftest import DemoSettings
 
-from bub.builtin.settings import AgentSettings
-from bub.configure import Config
 from bub.framework import BubFramework
 from bub.hooks import Hooks
 
@@ -138,21 +135,11 @@ async def test_running_enters_every_registered_lifespan(tmp_path: Path) -> None:
     assert entered == ["first-in", "second-in", "second-out", "first-out"]
 
 
-def test_config_sections_resolve_from_explicit_configuration(write_config) -> None:
-    expected = "test-token"
-    config_file = write_config(
-        f"""
-model: openai:gpt-5
-demo:
-    token: {expected}
-""".strip()
-    )
-    framework = BubFramework(
-        workspace=config_file.parent, home=config_file.parent, config=Config.from_file(config_file)
-    )
+def test_framework_has_no_configuration_surface(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
-    assert framework.config.ensure(AgentSettings).model == "openai:gpt-5"
-    assert framework.config.ensure(DemoSettings).token == expected
+    assert not hasattr(framework, "config")
+    assert not hasattr(framework, "settings")
 
 
 @pytest.mark.asyncio
@@ -185,3 +172,14 @@ def test_process_inbound_is_gone(tmp_path: Path) -> None:
     assert not hasattr(framework, "process_inbound")
     assert not hasattr(framework, "build_prompt")
     assert not hasattr(framework, "resolve_session")
+
+
+def test_settings_machinery_is_gone() -> None:
+    import importlib.util
+
+    import bub
+
+    assert importlib.util.find_spec("bub.configure") is None
+    assert importlib.util.find_spec("bub.builtin.settings") is None
+    assert "Config" not in bub.__all__
+    assert "Settings" not in bub.__all__

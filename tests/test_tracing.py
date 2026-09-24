@@ -17,8 +17,7 @@ from bub import tracing
 from bub.builtin.agent import Agent
 from bub.builtin.context import default_tape_context
 from bub.builtin.hooks import BuiltinHooks
-from bub.builtin.model_runner import ModelRunner
-from bub.builtin.settings import AgentSettings, ModelCandidate
+from bub.builtin.model_runner import ModelCandidate, ModelRunner
 from bub.framework import BubFramework
 from bub.hooks import Hooks, LlmCallDecision, ToolCallDecision
 from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
@@ -46,9 +45,8 @@ def spans(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 def agent(tmp_path: Path) -> Agent:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
     framework.add_hooks(BuiltinHooks(framework).hooks)
-    agent = Agent(framework)
-    agent.settings = AgentSettings.model_construct(model="openai:test", api_key="unused", api_base=None)
-    agent.model_runner = ModelRunner(agent.settings, hooks=framework.hooks)
+    agent = Agent(framework, model="openai:test", api_key="unused", api_base=None)
+    agent.model_runner = ModelRunner(model="openai:test", api_key="unused", api_base=None, hooks=framework.hooks)
     agent.__dict__["tape"] = Tape(AsyncTapeStoreAdapter(InMemoryTapeStore()), default_tape_context())
     return agent
 
@@ -402,7 +400,7 @@ async def test_streaming_usage_arrives_on_last_chunk(spans: Any, agent: Agent, m
 async def test_timeout_marks_model_and_agent_as_failed(
     spans: Any, agent: Agent, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    agent.settings.model_timeout_seconds = 0
+    agent.model_runner.timeout_seconds = 0
 
     async def respond(**kwargs: Any) -> ChatCompletion:
         await asyncio.Event().wait()

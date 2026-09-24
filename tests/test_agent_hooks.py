@@ -200,7 +200,6 @@ class TestModelRunnerHookIntegration:
 
     def _runner_and_tape(self, hooks: Hooks, captured: dict):
         from bub.builtin.model_runner import ModelRunner
-        from bub.builtin.settings import AgentSettings
         from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
         from bub.tape import Tape, TapeContext
 
@@ -214,8 +213,7 @@ class TestModelRunnerHookIntegration:
 
                 return chunks()
 
-        settings = AgentSettings.model_construct(model="openai:orig", max_tokens=100, model_timeout_seconds=None)
-        runner = FakeRunner(settings, hooks=hooks)
+        runner = FakeRunner(model="openai:orig", max_tokens=100, hooks=hooks)
         store = AsyncTapeStoreAdapter(InMemoryTapeStore())
         tape = Tape(store, TapeContext(anchor=None)).scoped("t1")
         return runner, tape

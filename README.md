@@ -27,26 +27,32 @@ uv add bub
 import asyncio
 from pathlib import Path
 
-from bub import BubFramework, Config, Hooks
+import yaml
+
+from bub import BubFramework
 from bub.builtin import Agent, Battery, BuiltinHooks, battery_tools
 
 
 async def main() -> None:
-    framework = BubFramework(
-        workspace=Path.cwd(),
-        home=Path("./run"),
-        config=Config({"model": "openai:gpt-5", "api_key": "sk-..."}),
-    )
+    settings = yaml.safe_load(Path("config.yml").read_text(encoding="utf-8")) or {}
+
+    framework = BubFramework(workspace=Path.cwd(), home=Path("./run"))
     framework.add_hooks(BuiltinHooks(framework).hooks)
 
     # Batteries are optional and come apart: take any of store, sidecars and lifespans.
-    battery = Battery(home=framework.home, config=framework.config)
+    battery = Battery(home=framework.home)
     framework.add_hooks(battery.hooks)
     framework.add_tape_store(battery.tape_store)
     framework.add_sidecars(*battery.sidecars)
     framework.add_lifespans(*battery.lifespans)
 
-    agent = Agent(framework, tools=battery_tools(), skill_dirs=[Path("./skills")])
+    agent = Agent(
+        framework,
+        model=settings["model"],
+        api_key=settings["api_key"],
+        tools=battery_tools(),
+        skill_dirs=[Path("./skills")],
+    )
     async with framework.running():
         stream = await agent.run_stream(session_id="demo", prompt="Hello")
         async for event in stream:
@@ -63,16 +69,11 @@ runtime has no tape store and `Agent` starts with whatever tools you pass. Build
 your own with `@tool` / `Tool.from_callable` and inject storage with
 `tape_store=FileTapeStore("sessions")`.
 
-Everything is instance-scoped and explicit. `BubFramework` takes `workspace`,
-`home`, and an optional `Config`; `Agent` takes its tools and skill roots; skill
+Everything is instance-scoped and explicit. `BubFramework` takes `workspace` and
+`home`; `Agent` takes its model, credentials, tools and skill roots; skill
 discovery only reads the roots you pass. The library reads no environment
-variables, touches no user directory, and keeps no process-wide registry.
-Build configuration from a mapping or a file:
-
-```python
-Config({"model": "openai:gpt-5"})
-Config.from_file(Path("./config.yml"))
-```
+variables, touches no user directory, keeps no process-wide registry, and loads
+no configuration file: where settings come from is the host's decision.
 
 From a checkout, `uv sync` is enough; `make install` is a thin wrapper around it.
 
@@ -120,12 +121,12 @@ slots you care about:
 from pathlib import Path
 
 from bub import BubFramework, Hooks
-from bub.builtin import Agent, Battery, BuiltinHooks
+from bub.builtin import Agent, Battery, BuiltinHooks, battery_tools
 
-framework = BubFramework(workspace=Path("."), home=Path(".bub"), config=Config.from_file(Path("config.yml")))
+framework = BubFramework(workspace=Path("."), home=Path(".bub"))
 framework.add_hooks(BuiltinHooks(framework).hooks)
 
-battery = Battery(home=framework.home, config=framework.config)
+battery = Battery(home=framework.home)
 framework.add_hooks(battery.hooks)
 framework.add_tape_store(battery.tape_store)
 framework.add_sidecars(*battery.sidecars)
@@ -142,7 +143,7 @@ async def audit(call, result, state):
 
 framework.add_hooks(Hooks(system_prompt=[one_paragraph], after_tool_call=[audit]))
 
-agent = Agent(framework, tools=battery_tools())
+agent = Agent(framework, model="openai:gpt-5", tools=battery_tools())
 async with framework.running():
     ...
 ```
@@ -151,47 +152,49 @@ async with framework.running():
 `lifespans` each go into their own slot, so you can take the file store without
 the shell manager, or the spill sidecar without the store.
 
-## Configuration
+## Parameters
 
-Configuration is a mapping passed to `Config`, either directly or through
-`Config.from_file(path)`. Nothing is read from the environment. The root section
-is `AgentSettings`; other sections belong to `Settings` subclasses that declare
-their own `section`:
+There is no settings layer. Every knob is a keyword argument on the object that
+uses it, so `Agent` is the whole surface for one agent:
 
-| Key                     | Default    | Description                                             |
-| ----------------------- | ---------- | ------------------------------------------------------- |
-| `model`                 | required   | Model identifier, `provider:model_id`                    |
-| `fallback_models`       | —          | Additional models tried when the primary call fails      |
-| `api_key`               | —          | Provider key, or a mapping keyed by provider             |
-| `api_base`              | —          | Custom provider endpoint, or a mapping keyed by provider |
-| `client_args`           | —          | Extra arguments for the underlying model client          |
-| `completion_args`       | —          | Extra arguments forwarded to each completion call        |
-| `max_steps`             | unlimited  | Tool-use loop limit; must be a positive integer          |
-| `max_tokens`            | `16384`    | Max tokens per model call                                |
-| `model_timeout_seconds` | —          | Model call timeout (seconds)                             |
+| Parameter               | Default   | Description                                              |
+| ----------------------- | --------- | -------------------------------------------------------- |
+| `model`                 | required  | Model identifier, `provider:model_id`                     |
+| `fallback_models`       | —         | Additional models tried when the primary call fails       |
+| `api_key`               | —         | Provider key, or a mapping keyed by provider              |
+| `api_base`              | —         | Custom provider endpoint, or a mapping keyed by provider  |
+| `client_args`           | —         | Extra arguments for the underlying model client           |
+| `completion_args`       | —         | Extra arguments forwarded to each completion call         |
+| `max_tokens`            | provider  | Max tokens per model call; unset sends no cap             |
+| `max_steps`             | unlimited | Tool-use loop limit                                       |
+| `model_timeout_seconds` | —         | Model call timeout (seconds)                              |
+| `tools`                 | —         | Tools available to this agent                             |
+| `skill_dirs`            | —         | Skill roots, first root wins on a name collision           |
+| `tape_store`            | framework | Store override; falls back to the framework's or memory    |
+| `sidecars`              | —         | Extra sidecars mounted after the framework's               |
+| `hooks`                 | —         | Extra callbacks appended after the framework's             |
 
-```yaml
-model: openai:gpt-5
-api_key:
-  openai: sk-...
-max_tokens: 8192
-spill:
-  threshold: 4096
-```
+`Battery(home=..., spill_threshold=4096)` covers the batteries; `spill_threshold=0`
+disables spilling. Nothing is read from the environment, no file is loaded, and
+nothing is validated against a schema: build a `dict` however you like (YAML,
+argparse, a secret store) and pass the keys you need.
 
 ```python
-from typing import ClassVar
+import yaml
+from pathlib import Path
 
-from bub import Config, Settings
+from bub.builtin import Agent, Battery, battery_tools
 
+settings = yaml.safe_load(Path("config.yml").read_text(encoding="utf-8")) or {}
 
-class SpillSettings(Settings):
-    section: ClassVar[str] = "spill"
-
-    threshold: int = 4096
-
-
-spill = Config.from_file(path).ensure(SpillSettings)
+agent = Agent(
+    framework,
+    model=settings["model"],
+    api_key=settings.get("api_key"),
+    max_tokens=settings.get("max_tokens"),
+    tools=battery_tools(),
+)
+battery = Battery(home=framework.home, spill_threshold=settings.get("spill", {}).get("threshold", 4096))
 ```
 
 ## Background
