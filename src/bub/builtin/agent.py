@@ -18,13 +18,13 @@ from bub.builtin.model_runner import (
     ModelRunner,
     is_context_length_error,
 )
-from bub.builtin.settings import load_settings
+from bub.builtin.settings import AgentSettings
 from bub.framework import BubFramework
 from bub.skills import discover_skills, render_skills_prompt
 from bub.store import AsyncTapeStore, AsyncTapeStoreAdapter, InMemoryTapeStore, TapeStore, is_async_tape_store
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape
-from bub.tools import REGISTRY, Tool, model_tools
+from bub.tools import Tool, model_tools
 from bub.tracing import Span, current_span
 from bub.turn import TurnState
 from bub.utils import workspace_from_state
@@ -40,7 +40,7 @@ class Agent:
         self,
         framework: BubFramework,
         *,
-        tools: Collection[Tool] | None = None,
+        tools: Collection[Tool] = (),
         tape_store: TapeStore | AsyncTapeStore | None = None,
         skill_dirs: Collection[Path] | None = None,
     ) -> None:
@@ -49,19 +49,19 @@ class Agent:
         Args:
             framework: Configured hook runtime supplying prompts, tape context,
                 interception hooks, and optional shared resources.
-            tools: Tools available to this instance. None snapshots the global
-                registry; an empty collection disables tools.
+            tools: Tools available to this instance. An empty collection means the
+                agent has no tools.
             tape_store: Explicit store, preferred over the framework's active
                 store. Without either, the agent uses an in-memory store.
             skill_dirs: Skill roots in precedence order. None uses project, user,
                 and builtin discovery; an empty collection disables discovery.
 
-        Settings come from Bub's process-wide configuration. The caller owns the
-        lifecycle of an explicitly supplied store.
+        Model settings come from the framework's configuration. The caller owns
+        the lifecycle of an explicitly supplied store.
         """
-        self.settings = load_settings()
+        self.settings = framework.config.ensure(AgentSettings)
         self.framework = framework
-        self.tools = {tool.name: tool for tool in tools} if tools is not None else REGISTRY.copy()
+        self.tools = {tool.name: tool for tool in tools}
         self.tape_store = tape_store
         self.skill_dirs = skill_dirs
         self.model_runner = ModelRunner(self.settings, hooks=framework.get_agent_hooks())
@@ -72,10 +72,8 @@ class Agent:
 
         Select the explicit store, active framework store, or an in-memory fallback,
         in that order. Adapt synchronous stores and use hook-provided context and
-        sidecars. Archive files use ``bub.home / 'tapes'`` independently of the store.
+        sidecars. Archive files live under the framework's home directory.
         """
-        import bub
-
         tape_store: TapeStore | AsyncTapeStore | None
         if self.tape_store is not None:
             tape_store = self.tape_store
@@ -86,7 +84,7 @@ class Agent:
         if not is_async_tape_store(tape_store):
             tape_store = AsyncTapeStoreAdapter(tape_store)
         return Tape(
-            bub.home / "tapes",
+            self.framework.home / "tapes",
             tape_store,
             self.framework.build_tape_context(),
             sidecars=self.framework.get_tape_sidecars(),
@@ -364,7 +362,11 @@ class Agent:
             if allowed_skills is None or skill.name.casefold() in allowed_skills
         }
         expanded_skills = set(HINT_RE.findall(prompt)) & set(skill_index.keys())
-        return render_skills_prompt(list(skill_index.values()), expanded_skills=expanded_skills)
+        return render_skills_prompt(
+            list(skill_index.values()),
+            expanded_skills=expanded_skills,
+            config=self.framework.config,
+        )
 
     async def _run_once(
         self,

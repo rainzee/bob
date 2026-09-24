@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from conftest import DemoSettings
 
-import bub.configure as configure
+from bub.configure import Config
 from bub.skills import (
     SKILL_FILE_NAME,
     SkillMetadata,
@@ -65,20 +65,20 @@ def test_skill_metadata_body_renders_config_templates(tmp_path: Path, load_confi
     )
 
     with patch.dict("os.environ", {}, clear=True):
-        load_config(
+        config = load_config(
             """
 demo:
   token: yaml-token
 """.strip(),
         )
 
-        body = metadata.body()
+        body = metadata.body(config)
 
     assert 'Token: "yaml-token"' in body
     assert f"Skill dir: {tmp_path / 'demo-skill'}" in body
 
 
-def test_skill_metadata_body_renders_env_over_config(tmp_path: Path, load_config) -> None:
+def test_skill_metadata_body_renders_env_over_config(tmp_path: Path, write_config) -> None:
     assert DemoSettings.__name__ == "DemoSettings"
     skill_file = _write_skill(tmp_path, "demo-skill", body='Token: "${config.demo.token}"')
     metadata = SkillMetadata(
@@ -87,17 +87,18 @@ def test_skill_metadata_body_renders_env_over_config(tmp_path: Path, load_config
         location=skill_file,
         source="project",
     )
-    load_config(
+    config_file = write_config(
         """
 demo:
   token: yaml-token
-""".strip(),
+""".strip()
     )
 
     with patch.dict("os.environ", {"BUB_DEMO_TOKEN": "env-token"}, clear=True):
-        configure._global_config.clear()
+        fresh = Config()
+        fresh.load(config_file)
 
-        assert metadata.body() == 'Token: "env-token"'
+        assert metadata.body(fresh) == 'Token: "env-token"'
 
 
 def test_read_skill_rejects_invalid_metadata_field_type(tmp_path: Path) -> None:

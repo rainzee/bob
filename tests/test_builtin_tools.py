@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-import bub.builtin.tools as builtin_tools
 from bub.builtin.shell_manager import ShellManager
 from bub.builtin.tools import (
     bash,
@@ -23,12 +22,18 @@ from bub.builtin.tools import (
 from bub.errors import ErrorKind
 from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
 from bub.tape import Tape, TapeContext
-from bub.tools import REGISTRY, Tool, ToolContext, ToolExecutor, render_tools_prompt, resolve_tool_names, tool
+from bub.tools import Tool, ToolContext, ToolExecutor, render_tools_prompt, resolve_tool_names, tool
+
+_TEST_SHELL_MANAGER = ShellManager()
 
 
 def _tool_context(tmp_path, **state) -> ToolContext:
     tape = Tape(tmp_path, AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
-    return ToolContext(tape=tape, run_id="test-run", state={"_runtime_workspace": str(tmp_path), **state})
+    return ToolContext(
+        tape=tape,
+        run_id="test-run",
+        state={"_runtime_workspace": str(tmp_path), "_runtime_shell_manager": _TEST_SHELL_MANAGER, **state},
+    )
 
 
 def _python_shell(code: str) -> str:
@@ -63,8 +68,6 @@ async def test_tape_info_formats_token_cache_hit_rate(tmp_path) -> None:
 def test_render_tools_prompt_renders_available_tools_block() -> None:
     first_name = "tests.prompt_one"
     second_name = "tests.prompt_two"
-    REGISTRY.pop(first_name, None)
-    REGISTRY.pop(second_name, None)
 
     @tool(name=first_name, description="First tool")
     def prompt_one() -> str:
@@ -81,7 +84,6 @@ def test_render_tools_prompt_renders_available_tools_block() -> None:
 
 def test_render_tools_prompt_includes_model_name_and_parameter_signature() -> None:
     tool_name = "tests.prompt_signature"
-    REGISTRY.pop(tool_name, None)
 
     @tool(name=tool_name, description="Read a file")
     def prompt_signature(path: str, offset: int = 0) -> str:
@@ -106,9 +108,7 @@ def test_resolve_tool_names_accepts_runtime_names_and_model_aliases() -> None:
     dotted_name = "tests.resolve_alias"
     underscored_name = "tests_with_underscore"
     excluded_name = "tests.excluded_tool"
-    REGISTRY.pop(dotted_name, None)
-    REGISTRY.pop(underscored_name, None)
-    REGISTRY.pop(excluded_name, None)
+    available = (dotted_name, underscored_name, excluded_name)
 
     @tool(name=dotted_name)
     def resolve_alias() -> str:
@@ -123,22 +123,26 @@ def test_resolve_tool_names_accepts_runtime_names_and_model_aliases() -> None:
         return "excluded"
 
     assert resolve_tool_names(
-        [" tests_resolve_alias ", " tests_with_underscore "], exclude={" tests_excluded_tool "}
+        [" tests_resolve_alias ", " tests_with_underscore "],
+        exclude={" tests_excluded_tool "},
+        all_names=available,
     ) == {
         dotted_name,
         underscored_name,
     }
-    assert dotted_name not in resolve_tool_names(None, exclude={" tests_resolve_alias "})
-    assert excluded_name not in resolve_tool_names(None, exclude={" tests_excluded_tool "})
-    assert resolve_tool_names(None, exclude={" tests_resolve_alias "}) >= {underscored_name}
+    assert dotted_name not in resolve_tool_names(None, exclude={" tests_resolve_alias "}, all_names=available)
+    assert excluded_name not in resolve_tool_names(None, exclude={" tests_excluded_tool "}, all_names=available)
+    assert resolve_tool_names(None, exclude={" tests_resolve_alias "}, all_names=available) >= {underscored_name}
 
 
 def test_resolve_tool_names_rejects_unknown_names() -> None:
-    with pytest.raises(ValueError, match="tests_missing_tool"):
-        resolve_tool_names([" tests_missing_tool "])
+    available = ("tests_present_tool",)
 
     with pytest.raises(ValueError, match="tests_missing_tool"):
-        resolve_tool_names(None, exclude={" tests_missing_tool "})
+        resolve_tool_names([" tests_missing_tool "], all_names=available)
+
+    with pytest.raises(ValueError, match="tests_missing_tool"):
+        resolve_tool_names(None, exclude={" tests_missing_tool "}, all_names=available)
 
 
 def test_bash_schema_exposes_command_parameter() -> None:
@@ -157,7 +161,7 @@ async def test_bash_returns_stdout_for_foreground_command(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_foreground_bash_releases_shell_from_shell_manager(tmp_path, monkeypatch) -> None:
     manager = ShellManager()
-    monkeypatch.setattr(builtin_tools, "shell_manager", manager)
+    monkeypatch.setattr(sys.modules[__name__], "_TEST_SHELL_MANAGER", manager)
 
     result = await bash.run(command=_python_shell("print('hello')"), context=_tool_context(tmp_path))
 
@@ -168,7 +172,7 @@ async def test_foreground_bash_releases_shell_from_shell_manager(tmp_path, monke
 @pytest.mark.asyncio
 async def test_foreground_bash_releases_shell_when_command_fails(tmp_path, monkeypatch) -> None:
     manager = ShellManager()
-    monkeypatch.setattr(builtin_tools, "shell_manager", manager)
+    monkeypatch.setattr(sys.modules[__name__], "_TEST_SHELL_MANAGER", manager)
 
     with pytest.raises(RuntimeError, match="command exited with code"):
         await bash.run(command=_python_shell("import sys; sys.exit(2)"), context=_tool_context(tmp_path))
@@ -179,7 +183,7 @@ async def test_foreground_bash_releases_shell_when_command_fails(tmp_path, monke
 @pytest.mark.asyncio
 async def test_foreground_bash_terminates_shell_when_cancelled(tmp_path, monkeypatch) -> None:
     manager = ShellManager()
-    monkeypatch.setattr(builtin_tools, "shell_manager", manager)
+    monkeypatch.setattr(sys.modules[__name__], "_TEST_SHELL_MANAGER", manager)
 
     task = asyncio.create_task(
         bash.run(
@@ -202,7 +206,7 @@ async def test_foreground_bash_terminates_shell_when_cancelled(tmp_path, monkeyp
 @pytest.mark.parametrize("ignore_term", [False, True])
 async def test_timed_out_bash_keeps_descendants_until_killed(tmp_path, monkeypatch, shell_exits, ignore_term) -> None:
     manager = ShellManager()
-    monkeypatch.setattr(builtin_tools, "shell_manager", manager)
+    monkeypatch.setattr(sys.modules[__name__], "_TEST_SHELL_MANAGER", manager)
     monkeypatch.setattr(manager, "TERMINATE_TIMEOUT", 0.2)
     pid_file = tmp_path / "child.pid"
     code = (
@@ -239,7 +243,7 @@ async def test_timed_out_bash_preserves_output_and_completes_in_background(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manager = ShellManager()
-    monkeypatch.setattr(builtin_tools, "shell_manager", manager)
+    monkeypatch.setattr(sys.modules[__name__], "_TEST_SHELL_MANAGER", manager)
     gate = tmp_path / "continue"
     command = _python_shell(
         "import sys, time\n"
@@ -371,7 +375,7 @@ async def test_bash_cleanup_does_not_return_a_released_shell_id_or_mask_cancella
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool
 ) -> None:
     manager = ShellManager()
-    monkeypatch.setattr(builtin_tools, "shell_manager", manager)
+    monkeypatch.setattr(sys.modules[__name__], "_TEST_SHELL_MANAGER", manager)
     monkeypatch.setattr(manager, "TERMINATE_TIMEOUT", 1.2)
     pid_file = tmp_path / "child.pid"
     child = _python_shell(

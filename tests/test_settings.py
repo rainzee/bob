@@ -6,9 +6,9 @@ from unittest.mock import patch
 import pytest
 from any_llm.constants import LLMProvider
 
-from bub.builtin.settings import DEFAULT_MODEL, AgentSettings, load_settings
+from bub.builtin.settings import DEFAULT_MODEL, AgentSettings
 from bub.builtin.spill import SpillSettings
-from bub.configure import ensure_config
+from bub.configure import Config
 
 
 def _settings_with_env(env: dict[str, str]) -> AgentSettings:
@@ -80,7 +80,7 @@ def test_settings_mixed_single_key_with_per_provider_base() -> None:
 
 def test_settings_load_values_from_yaml(load_config) -> None:
     with patch.dict(os.environ, {}, clear=True):
-        load_config(
+        config = load_config(
             """
 model: openai:gpt-5
 fallback_models:
@@ -99,7 +99,7 @@ completion_args:
 """.strip(),
         )
 
-        settings = load_settings()
+        settings = config.ensure(AgentSettings)
 
     assert settings.model == "openai:gpt-5"
     assert settings.fallback_models == ["openai:gpt-4o-mini"]
@@ -113,7 +113,7 @@ completion_args:
 
 
 def test_env_settings_override_yaml(load_config) -> None:
-    config = """
+    yaml_content = """
 model: openai:gpt-5
 api_key: sk-yaml
 max_steps: 77
@@ -134,8 +134,8 @@ client_args:
         },
         clear=True,
     ):
-        load_config(config)
-        settings = load_settings()
+        config = load_config(yaml_content)
+        settings = config.ensure(AgentSettings)
 
     assert settings.model == "anthropic:claude-3-7-sonnet"
     assert settings.api_key == "sk-env"
@@ -161,14 +161,14 @@ def test_spill_sidecar_settings_can_be_configured_or_disabled() -> None:
 
 
 def test_spill_sidecar_settings_load_from_the_plugin_section(load_config) -> None:
-    load_config("spill:\n  threshold: 64")
+    config = load_config("spill:\n  threshold: 64")
 
-    assert ensure_config(SpillSettings).threshold == 64
+    assert config.ensure(SpillSettings).threshold == 64
 
 
 def test_load_settings_returns_defaults_without_loaded_config() -> None:
     with patch.dict(os.environ, {}, clear=True):
-        settings = load_settings()
+        settings = Config().ensure(AgentSettings)
 
     assert settings.model == DEFAULT_MODEL
     assert settings.max_steps == AgentSettings.model_fields["max_steps"].default
@@ -176,12 +176,12 @@ def test_load_settings_returns_defaults_without_loaded_config() -> None:
 
 def test_load_settings_returns_loaded_config(load_config) -> None:
     with patch.dict(os.environ, {}, clear=True):
-        load_config(
+        config = load_config(
             """
 model: openrouter:openrouter/free
 """.strip(),
         )
 
-        settings = load_settings()
+        settings = config.ensure(AgentSettings)
 
     assert settings.model == "openrouter:openrouter/free"

@@ -5,9 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from bub.builtin import battery_tools
 from bub.builtin.tools import run_subagent
 from bub.streaming import AsyncStreamEvents, StreamEvent
-from bub.tools import REGISTRY, tool
+from bub.tools import tool
 
 
 class FakeContext:
@@ -20,7 +21,7 @@ class FakeContext:
 
 class FakeAgent:
     def __init__(self) -> None:
-        self.tools = REGISTRY.copy()
+        self.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
         self.run_stream = AsyncMock(side_effect=self._run_stream)
 
     async def _run_stream(self, **kwargs: Any) -> AsyncStreamEvents:
@@ -108,13 +109,13 @@ async def test_subagent_default_session_when_missing() -> None:
 @pytest.mark.asyncio
 async def test_subagent_empty_allowed_tools_defaults_to_all_non_subagent_tools() -> None:
     tool_name = "tests.allowed_tool_default"
-    REGISTRY.pop(tool_name, None)
 
     @tool(name=tool_name)
     def allowed_tool_default() -> str:
         return "ok"
 
     agent = FakeAgent()
+    agent.tools[tool_name] = allowed_tool_default
     ctx = FakeContext({"_runtime_agent": agent, "session_id": "user/abc"})
 
     await run_subagent.run(prompt="task", allowed_tools=[], context=ctx)
@@ -127,13 +128,13 @@ async def test_subagent_empty_allowed_tools_defaults_to_all_non_subagent_tools()
 @pytest.mark.asyncio
 async def test_subagent_resolves_model_tool_aliases_to_runtime_names() -> None:
     tool_name = "tests.resolve_subagent"
-    REGISTRY.pop(tool_name, None)
 
     @tool(name=tool_name)
     def resolve_subagent() -> str:
         return "ok"
 
     agent = FakeAgent()
+    agent.tools[tool_name] = resolve_subagent
     ctx = FakeContext({"_runtime_agent": agent, "session_id": "user/abc"})
 
     await run_subagent.run(prompt="task", allowed_tools=[" tests_resolve_subagent "], context=ctx)

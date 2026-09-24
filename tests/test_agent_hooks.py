@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pluggy
@@ -259,8 +260,7 @@ class TestBeforeLlmCallFinish:
 class TestModelRunnerHookIntegration:
     """Regression tests for PR #255 review findings (effective request, exactly-once)."""
 
-    def _runner_and_tape(self, hooks: AgentHooks, captured: dict):
-        import bub
+    def _runner_and_tape(self, hooks: AgentHooks, captured: dict, archive_path: Path):
         from bub.builtin.model_runner import ModelRunner
         from bub.builtin.settings import AgentSettings
         from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
@@ -279,18 +279,18 @@ class TestModelRunnerHookIntegration:
         settings = AgentSettings.model_construct(model="openai:orig", max_tokens=100, model_timeout_seconds=None)
         runner = FakeRunner(settings, hooks=hooks)
         store = AsyncTapeStoreAdapter(InMemoryTapeStore())
-        tape = Tape(bub.home / "tapes", store, TapeContext(anchor=None)).scoped("t1")
+        tape = Tape(archive_path, store, TapeContext(anchor=None)).scoped("t1")
         return runner, tape
 
     @pytest.mark.asyncio
-    async def test_rewritten_model_and_max_tokens_reach_provider_and_tape(self) -> None:
+    async def test_rewritten_model_and_max_tokens_reach_provider_and_tape(self, tmp_path: Path) -> None:
         class Reroute:
             @hookimpl
             def before_llm_call(self, request: LlmCallRequest, state: dict) -> LlmCallRequest:
                 return replace(request, model="anthropic:new", max_tokens=42)
 
         captured: dict = {}
-        runner, tape = self._runner_and_tape(make_hooks(Reroute()), captured)
+        runner, tape = self._runner_and_tape(make_hooks(Reroute()), captured, tmp_path / "tapes")
         events = runner.run(tape=tape, model="openai:orig", tools=[], system_prompt=None, prompt="hi")
         async for _ in events:
             pass
@@ -300,7 +300,7 @@ class TestModelRunnerHookIntegration:
         assert run_events[-1].payload["data"]["model"] == "anthropic:new"
 
     @pytest.mark.asyncio
-    async def test_after_llm_call_not_fired_on_early_close(self) -> None:
+    async def test_after_llm_call_not_fired_on_early_close(self, tmp_path: Path) -> None:
         observed: list[LlmCallResult] = []
 
         class Observe:
@@ -309,7 +309,7 @@ class TestModelRunnerHookIntegration:
                 observed.append(result)
 
         captured: dict = {}
-        runner, tape = self._runner_and_tape(make_hooks(Observe()), captured)
+        runner, tape = self._runner_and_tape(make_hooks(Observe()), captured, tmp_path / "tapes")
 
         from bub.builtin.model_runner import ModelRunner  # noqa: F401
 
@@ -329,7 +329,7 @@ class TestModelRunnerHookIntegration:
         assert observed == []
 
     @pytest.mark.asyncio
-    async def test_after_llm_call_fires_exactly_once_on_success(self) -> None:
+    async def test_after_llm_call_fires_exactly_once_on_success(self, tmp_path: Path) -> None:
         observed: list[LlmCallResult] = []
 
         class Observe:
@@ -338,7 +338,7 @@ class TestModelRunnerHookIntegration:
                 observed.append(result)
 
         captured: dict = {}
-        runner, tape = self._runner_and_tape(make_hooks(Observe()), captured)
+        runner, tape = self._runner_and_tape(make_hooks(Observe()), captured, tmp_path / "tapes")
         events = runner.run(tape=tape, model="openai:orig", tools=[], system_prompt=None, prompt="hi")
         async for _ in events:
             pass

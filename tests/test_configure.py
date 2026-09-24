@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 from conftest import DemoSettings
 
-import bub.configure as configure
 from bub.builtin.settings import AgentSettings
+from bub.configure import Config
 
 
 def test_load_registers_root_and_named_config_sections(tmp_path: Path) -> None:
@@ -24,55 +24,64 @@ demo:
     )
 
     with patch.dict(os.environ, {}, clear=True):
-        loaded = configure.load(config_file)
+        config = Config()
+        loaded = config.load(config_file)
 
         assert loaded["model"] == "openai:gpt-5"
         assert loaded["demo"]["token"] == expected_token
-        assert configure.ensure_config(AgentSettings).model == "openai:gpt-5"
-        assert configure.ensure_config(DemoSettings).token == expected_token
+        assert config.ensure(AgentSettings).model == "openai:gpt-5"
+        assert config.ensure(DemoSettings).token == expected_token
+
+
+def test_ensure_caches_within_one_config_and_not_across_instances() -> None:
+    config = Config()
+
+    assert config.ensure(AgentSettings) is config.ensure(AgentSettings)
+    assert Config().ensure(AgentSettings) is not config.ensure(AgentSettings)
 
 
 def test_get_value_reads_registered_section_from_yaml(load_config) -> None:
     with patch.dict(os.environ, {}, clear=True):
-        load_config(
+        config = load_config(
             """
 demo:
   token: yaml-token
 """.strip(),
         )
 
-        assert configure.get_value("demo.token") == "yaml-token"
+        assert config.get_value("demo.token") == "yaml-token"
 
 
-def test_get_value_prefers_registered_env_over_yaml(load_config) -> None:
-    load_config(
+def test_get_value_prefers_registered_env_over_yaml(write_config) -> None:
+    config_file = write_config(
         """
 demo:
   token: yaml-token
-""".strip(),
+""".strip()
     )
 
     with patch.dict(os.environ, {"BUB_DEMO_TOKEN": "env-token"}, clear=True):
-        configure._global_config.clear()
+        config = Config()
+        config.load(config_file)
 
-        assert configure.get_value("demo.token") == "env-token"
+        assert config.get_value("demo.token") == "env-token"
 
 
 def test_get_value_descends_into_registered_dict_field(load_config) -> None:
     with patch.dict(os.environ, {}, clear=True):
-        load_config(
+        config = load_config(
             """
 api_key:
   openai: sk-yaml
 """.strip(),
         )
 
-        assert configure.get_value("api_key") == {"openai": "sk-yaml"}
-        assert configure.get_value("api_key.openai") == "sk-yaml"
+        assert config.get_value("api_key") == {"openai": "sk-yaml"}
+        assert config.get_value("api_key.openai") == "sk-yaml"
 
 
 def test_get_value_ignores_raw_unregistered_path(load_config) -> None:
-    load_config(
+    config = load_config(
         """
 custom:
   nested:
@@ -81,8 +90,8 @@ custom:
     )
 
     with pytest.raises(KeyError):
-        configure.get_value("custom.nested.value")
+        config.get_value("custom.nested.value")
 
 
 def test_get_value_returns_default_for_missing_path() -> None:
-    assert configure.get_value("missing.value", default="fallback") == "fallback"
+    assert Config().get_value("missing.value", default="fallback") == "fallback"

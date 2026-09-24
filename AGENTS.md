@@ -6,9 +6,11 @@ Core code lives under `src/`:
 
 - `src/bub/framework.py`: turn orchestration, hook loading, and resource lifecycle.
 - `src/bub/hooks/`: hook specifications, execution helpers, and interception contracts.
+- `src/bub/configure.py`: `Settings`, the `@config()` section registry, and the per-framework `Config` object.
 - `src/bub/message.py`: the concrete inbound envelope (`Message`) and media items.
-- `src/bub/{envelope,turn,streaming,errors,model_selection}.py`: small kernel vocabulary owned by each concern.
+- `src/bub/{envelope,turn,streaming,errors}.py`: small kernel vocabulary owned by each concern.
 - `src/bub/builtin/`: builtin runtime, settings, tools, tape services, and provider adapters.
+- `src/bub/builtin/hook_impl.py`: `BuiltinImpl` (turn pipeline) and `BatteryImpl` (opt-in tape store, spill, shells).
 - `src/bub/skills.py` / `src/bub/tools.py`: skill discovery and tool registry.
 
 Tests live in `tests/`.

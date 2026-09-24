@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bub.builtin import battery_tools
 from bub.builtin.hook_impl import (
     AGENTS_FILE_NAME,
     DEFAULT_CONTINUE_PROMPT,
@@ -19,7 +20,6 @@ from bub.message import Message
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape, TapeContext
-from bub.tools import REGISTRY
 
 
 def _fake_tape(home: Path) -> Tape:
@@ -33,7 +33,7 @@ def _fake_tape(home: Path) -> Tape:
 class FakeAgent:
     def __init__(self, home: Path, *, tape: Tape | None = None) -> None:
         self.settings = SimpleNamespace(home=home)
-        self.tools = REGISTRY.copy()
+        self.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
         # A real in-memory async tape so load_state's recovery path runs against
         # the same store the tests write `model_switch` events to.
         self.tape = tape if tape is not None else _fake_tape(home)
@@ -278,9 +278,8 @@ def test_system_prompt_ignores_missing_agents_file(tmp_path: Path) -> None:
     assert result == DEFAULT_SYSTEM_PROMPT + "\n\n"
 
 
-def test_battery_impl_provides_file_tape_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    framework, _, _ = _build_impl(tmp_path)
-    monkeypatch.setenv("BUB_HOME", str(tmp_path))
+def test_battery_impl_provides_file_tape_store(tmp_path: Path) -> None:
+    framework = BubFramework(home=tmp_path)
 
     store = BatteryImpl(framework).provide_tape_store()
 

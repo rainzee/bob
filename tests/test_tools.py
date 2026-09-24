@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 from pydantic import BaseModel
 
-from bub.tools import REGISTRY, Tool, model_tools, tool, tool_call_reporter
+from bub.tools import Tool, model_tools, tool, tool_call_reporter
 
 
 class EchoInput(BaseModel):
@@ -38,7 +38,6 @@ def test_tool_builds_completion_payload() -> None:
 
 def test_model_tools_rewrites_dotted_names_without_mutating_original() -> None:
     tool_name = "tests.rename_me"
-    REGISTRY.pop(tool_name, None)
 
     @tool(name=tool_name, description="rename")
     def rename_me(value: str) -> str:
@@ -62,9 +61,8 @@ def test_model_tools_maps_dotted_names_to_model_aliases() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_decorator_registers_tool_and_preserves_metadata() -> None:
+async def test_tool_decorator_preserves_metadata() -> None:
     tool_name = "tests.sync_tool"
-    REGISTRY.pop(tool_name, None)
 
     @tool(name=tool_name, description="Sync test tool", model=EchoInput)
     def sync_tool(payload: EchoInput) -> str:
@@ -72,14 +70,12 @@ async def test_tool_decorator_registers_tool_and_preserves_metadata() -> None:
 
     assert sync_tool.name == tool_name
     assert sync_tool.description == "Sync test tool"
-    assert REGISTRY[tool_name] is sync_tool
     assert await sync_tool.run(value="hello") == "HELLO"
 
 
 @pytest.mark.asyncio
 async def test_tool_wrapper_logs_and_omits_context_from_log_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     tool_name = "tests.async_tool"
-    REGISTRY.pop(tool_name, None)
     messages: list[str] = []
 
     def record(message: str, *args: Any, **kwargs: Any) -> None:
@@ -94,7 +90,6 @@ async def test_tool_wrapper_logs_and_omits_context_from_log_payload(monkeypatch:
     result = await async_tool.run("hello", context="ctx")
 
     assert result == "hello:ctx"
-    assert REGISTRY[tool_name] is async_tool
     assert len(messages) == 2
     assert messages[0] == 'tool.call.start name=tests.async_tool { "hello" }'
     assert messages[1].startswith("tool.call.success name=tests.async_tool elapsed_time=")
@@ -103,7 +98,6 @@ async def test_tool_wrapper_logs_and_omits_context_from_log_payload(monkeypatch:
 @pytest.mark.asyncio
 async def test_tool_wrapper_logs_failures_before_reraising(monkeypatch: pytest.MonkeyPatch) -> None:
     tool_name = "tests.failing_tool"
-    REGISTRY.pop(tool_name, None)
     errors: list[str] = []
 
     def record_exception(message: str, *args: Any, **kwargs: Any) -> None:
@@ -125,7 +119,6 @@ async def test_tool_wrapper_logs_failures_before_reraising(monkeypatch: pytest.M
 @pytest.mark.asyncio
 async def test_tool_wrapper_uses_reporter_instead_of_logs(monkeypatch: pytest.MonkeyPatch) -> None:
     tool_name = "tests.reported_tool"
-    REGISTRY.pop(tool_name, None)
     logged: list[str] = []
     reported: list[tuple[str, str, Any]] = []
 
@@ -161,14 +154,13 @@ async def test_tool_wrapper_uses_reporter_instead_of_logs(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_tool_direct_call_registers_wrapped_instance_in_registry() -> None:
+async def test_tool_direct_call_is_a_plain_value() -> None:
     tool_name = "tests.direct_call"
-    REGISTRY.pop(tool_name, None)
 
     def direct_call(value: str) -> str:
         return value.upper()
 
     direct_tool = tool(direct_call, name=tool_name)
 
-    assert REGISTRY[tool_name] is direct_tool
-    assert await REGISTRY[tool_name].run("hello") == "HELLO"
+    assert direct_tool.name == tool_name
+    assert await direct_tool.run("hello") == "HELLO"

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-import bub.builtin.shell_manager as shell_module
+from bub.builtin.hook_impl import BatteryImpl
 from bub.builtin.shell_manager import ManagedShell, ShellManager
 from bub.framework import BubFramework
 
@@ -39,14 +39,19 @@ def _framework(tmp_path: Path) -> BubFramework:
     return framework
 
 
+def _battery_manager(framework: BubFramework) -> ShellManager:
+    batteries = framework.plugin_manager.get_plugin("batteries")
+    assert isinstance(batteries, BatteryImpl)
+    return batteries.shell_manager
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_kind", ["normal", "error", "cancel"])
 async def test_framework_lifespan_terminates_background_shells(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_kind: str
 ) -> None:
-    manager = ShellManager()
-    monkeypatch.setattr(shell_module, "shell_manager", manager)
     framework = _framework(tmp_path)
+    manager = _battery_manager(framework)
     ready = asyncio.Event()
     finish = asyncio.Event()
     shells: list[ManagedShell] = []
@@ -84,24 +89,11 @@ async def test_framework_lifespan_terminates_background_shells(
             await manager.terminate(shell_id)
 
 
-@pytest.mark.asyncio
-async def test_lifespan_and_session_cleanup_do_not_kill_another_runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    manager = ShellManager()
-    monkeypatch.setattr(shell_module, "shell_manager", manager)
-    async with _framework(tmp_path).running():
-        outer = await _sleeping_shell(manager)
-        async with _framework(tmp_path).running():
-            inner = await _sleeping_shell(manager)
-            assert await manager.terminate_session("same") == 1
-            assert inner.returncode is not None
-            assert outer.returncode is None
-            inner = await _sleeping_shell(manager)
-        assert inner.returncode is not None
-        assert outer.returncode is None
-    assert outer.returncode is not None
-    assert manager._shells == {}
+def test_two_frameworks_own_independent_shell_managers(tmp_path: Path) -> None:
+    first = _framework(tmp_path)
+    second = _framework(tmp_path)
+
+    assert _battery_manager(first) is not _battery_manager(second)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
@@ -283,9 +275,8 @@ async def test_startup_failure_cleans_shells_from_entered_lifespan(
 ) -> None:
     from bub.hooks import hookimpl
 
-    manager = ShellManager()
-    monkeypatch.setattr(shell_module, "shell_manager", manager)
     framework = _framework(tmp_path)
+    manager = _battery_manager(framework)
     shells: list[ManagedShell] = []
 
     class FailingStore:

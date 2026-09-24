@@ -2,24 +2,28 @@
 
 from __future__ import annotations
 
-import os
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
-from pathlib import Path
-from typing import TYPE_CHECKING
 
-from bub.configure import Settings, config, ensure_config
+from bub.builtin.agent import Agent
+from bub.configure import Config, Settings, config
 from bub.framework import DEFAULT_HOME, BubFramework
 from bub.hooks import hookimpl
-from bub.tools import tool
+from bub.message import MediaItem, Message
+from bub.tools import Tool, ToolContext, tool
 
 __all__ = [
+    "DEFAULT_HOME",
+    "Agent",
     "BubFramework",
+    "Config",
+    "MediaItem",
+    "Message",
     "Settings",
+    "Tool",
+    "ToolContext",
     "config",
-    "ensure_config",
-    "home",
     "hookimpl",
     "tool",
 ]
@@ -31,15 +35,3 @@ except ModuleNotFoundError:
         __version__ = metadata_version("bub")
     except PackageNotFoundError:
         __version__ = "0.0.0"
-
-
-if TYPE_CHECKING:
-    home: Path
-
-
-def __getattr__(name: str):
-    if name == "home":
-        if "BUB_HOME" in os.environ:
-            return Path(os.path.expanduser(os.environ["BUB_HOME"]))
-        return DEFAULT_HOME
-    raise AttributeError(f"module {__name__} has no attribute {name}")

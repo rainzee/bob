@@ -9,8 +9,7 @@ from unittest.mock import patch
 import pytest
 from conftest import DemoSettings
 
-from bub.builtin.settings import load_settings
-from bub.configure import ensure_config
+from bub.builtin.settings import AgentSettings
 from bub.framework import BubFramework
 from bub.hooks import hookimpl
 from bub.message import Message
@@ -149,8 +148,8 @@ demo:
 
         framework.load_hooks()
 
-        assert load_settings().model == "openai:gpt-5"
-        assert ensure_config(DemoSettings).token == expected
+        assert framework.config.ensure(AgentSettings).model == "openai:gpt-5"
+        assert framework.config.ensure(DemoSettings).token == expected
 
 
 def test_load_hooks_initializes_callable_plugins_after_config_load(
@@ -160,8 +159,8 @@ def test_load_hooks_initializes_callable_plugins_after_config_load(
         framework = BubFramework(config_file=write_config("model: openai:gpt-5"))
 
         class SettingsAwarePlugin:
-            def __init__(self, _framework: BubFramework) -> None:
-                self.model = load_settings().model
+            def __init__(self, framework: BubFramework) -> None:
+                self.model = framework.config.ensure(AgentSettings).model
 
             @hookimpl
             def provide_tape_store(self) -> None:

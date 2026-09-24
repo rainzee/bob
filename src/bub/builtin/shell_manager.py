@@ -248,6 +248,3 @@ class ShellManager:
             return
         while chunk := await stream.read(4096):
             shell.output_chunks.append(chunk.decode("utf-8", errors="replace"))
-
-
-shell_manager = ShellManager()

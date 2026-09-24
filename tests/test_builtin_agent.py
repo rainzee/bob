@@ -9,13 +9,14 @@ import pytest
 from any_llm.types.completion import ChatCompletionChunk
 
 import bub.builtin.tools  # noqa: F401  — registers builtin tools (incl. `model`)
+from bub.builtin import battery_tools
 from bub.builtin.agent import Agent
 from bub.builtin.model_runner import ModelRunner
 from bub.builtin.settings import AgentSettings
 from bub.errors import BubError
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import TapeContext
-from bub.tools import REGISTRY, tool
+from bub.tools import tool
 
 # ---------------------------------------------------------------------------
 # Agent.run() tests: merge_back logic and model passthrough
@@ -49,7 +50,7 @@ def _make_agent() -> Agent:
 
     agent.settings = AgentSettings.model_construct(model="test:model", api_key="k", api_base="b", client_args={})
     agent.framework = framework
-    agent.tools = REGISTRY.copy()
+    agent.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
     agent.tape_store = None
     agent.skill_dirs = None
     agent.model_runner = _FakeModelRunner(agent.settings)
@@ -327,8 +328,6 @@ async def test_agent_run_model_override_does_not_mutate_default() -> None:
 async def test_agent_run_resolves_allowed_tool_aliases_and_limits_prompt() -> None:
     allowed_name = "tests.allowed_agent_tool"
     denied_name = "tests.denied_agent_tool"
-    REGISTRY.pop(allowed_name, None)
-    REGISTRY.pop(denied_name, None)
 
     @tool(name=allowed_name, description="Allowed tool")
     def allowed_agent_tool() -> str:
@@ -339,6 +338,8 @@ async def test_agent_run_resolves_allowed_tool_aliases_and_limits_prompt() -> No
         return "denied"
 
     agent = _make_agent()
+    agent.tools[allowed_name] = allowed_agent_tool
+    agent.tools[denied_name] = denied_agent_tool
     fork_capture = _ForkCapture()
     fake_tapes = _FakeTapeFactory(fork_capture)
     agent.tape = fake_tapes  # type: ignore[assignment]

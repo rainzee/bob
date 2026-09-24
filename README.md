@@ -27,16 +27,14 @@ uv add bub
 import asyncio
 
 from bub import BubFramework
-from bub.builtin import Agent
-from bub.store import FileTapeStore
+from bub.builtin import Agent, battery_tools
 
 
 async def main() -> None:
     framework = BubFramework()
-    # batteries=True adds the builtin tool set (bash, fs.*, tape.*, web.fetch,
-    # subagent), the file tape store, tool-output spill, and shell lifecycle.
+    # batteries=True adds the file tape store, tool-output spill, and shell lifecycle.
     framework.load_builtin_hooks(batteries=True)
-    agent = Agent(framework)
+    agent = Agent(framework, tools=battery_tools())
     async with framework.running():
         stream = await agent.run_stream(session_id="demo", prompt="Hello")
         async for event in stream:
@@ -47,9 +45,15 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Without `batteries=True` the default hooks own only the turn pipeline, `Agent()`
-starts with no tools, and no tape store is provided; supply your own with
-`Agent(framework, tools=[...], tape_store=FileTapeStore("sessions"))`.
+`battery_tools()` is the builtin tool set (bash, fs.*, tape.*, web.fetch, subagent,
+spill reader). Without `batteries=True` the default hooks own only the turn
+pipeline and provide no tape store, and `Agent` starts with whatever tools you
+pass; build your own with `@tool` / `Tool.from_callable` and inject storage with
+`tape_store=FileTapeStore("sessions")`.
+
+`BubFramework(config_file=..., home=...)` owns this instance's config and home
+directory (`BUB_HOME` is read only when neither is given). There are no
+process-wide configuration or tool registries.
 
 From a checkout, `uv sync` is enough; for local development use `make install` so `prek` hooks are installed too.
 
@@ -58,7 +62,7 @@ From a checkout, `uv sync` is enough; for local development use `make install` s
 - **Composable by design.** Every turn stage is a plugin hook. Override one stage or replace the whole flow without forking the runtime.
 - **Tape context.** Context is rebuilt from append-only records, not carried around as mutable session state. Easier to inspect, replay, and hand off.
 - **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel, REPL, or transport is baked in.
-- **Batteries optional.** Tools, skills, tape stores, and model execution ship with the runtime, but the batteries are opt-in: the default hooks own only the turn pipeline.
+- **Batteries optional.** Tools, skills, tape stores, and model execution ship with the runtime, but the batteries are opt-in and the tool set is passed to each agent explicitly.
 - **Operator equivalence.** Humans and agents work inside the same runtime boundaries, with the same evidence trail and handoff model. No hidden operator class.
 
 ## How It Works

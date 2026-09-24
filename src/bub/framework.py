@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, cast
 
 import pluggy
-from dotenv import find_dotenv, load_dotenv
 from loguru import logger
 
-from bub import configure
+from bub.configure import Config
 from bub.envelope import Envelope, content_of, field_of
 from bub.hooks.interception import AgentHooks
 from bub.hooks.runtime import HookRuntime
@@ -23,28 +23,40 @@ from bub.tape import Tape, TapeContext
 from bub.turn import TurnResult, TurnState
 from bub.utils import maybe_context_manager
 
-load_dotenv(find_dotenv(usecwd=True))
 DEFAULT_HOME = Path.home() / ".bub"
-DEFAULT_CONFIG_FILE = (DEFAULT_HOME / "config.yml").resolve()
+
+
+def resolve_home(home: Path | None) -> Path:
+    """Resolve the Bub home directory from an explicit path, ``BUB_HOME``, or the user's home"""
+
+    if home is not None:
+        return home.expanduser().resolve()
+    env_home = os.environ.get("BUB_HOME")
+    if env_home:
+        return Path(env_home).expanduser().resolve()
+    return DEFAULT_HOME
 
 
 class BubFramework:
     """Minimal framework core. Everything grows from hook skills."""
 
-    def __init__(self, config_file: Path = DEFAULT_CONFIG_FILE) -> None:
-        """Create a hook runtime and load the process-wide configuration file.
+    def __init__(self, config_file: Path | None = None, home: Path | None = None) -> None:
+        """Create a hook runtime and load this instance's configuration file.
 
-        The workspace initially points to the current directory. Register plugins
-        or load builtin hooks before executing turns; construction does not load them.
+        The workspace initially points to the current directory and the config file
+        defaults to ``<home>/config.yml``. Register plugins or load builtin hooks
+        before executing turns; construction does not load them.
         """
         self.workspace = Path.cwd().resolve()
-        self.config_file = config_file.resolve()
+        self.home = resolve_home(home)
+        self.config_file = (config_file or self.home / "config.yml").resolve()
+        self.config = Config()
         self._plugin_manager = pluggy.PluginManager(BUB_HOOK_NAMESPACE)
         self._plugin_manager.add_hookspecs(BubHookSpecs)
         self._hook_runtime = HookRuntime(self._plugin_manager)
         self._agent_hooks = AgentHooks(self._hook_runtime)
         self._tape_store: TapeStore | AsyncTapeStore | None = None
-        configure.load(self.config_file)
+        self.config.load(self.config_file)
 
     @property
     def plugin_manager(self) -> pluggy.PluginManager:

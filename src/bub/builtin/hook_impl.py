@@ -217,29 +217,33 @@ class BatteryImpl:
     """
 
     def __init__(self, framework: BubFramework) -> None:
-        from bub.builtin import spill, tools  # noqa: F401  importing registers the battery tools
+        from bub.builtin.shell_manager import ShellManager
 
         self.framework = framework
+        self.shell_manager = ShellManager()
+
+    @hookimpl
+    def load_state(self, message: Message, session_id: str) -> dict[str, Any]:
+        del message, session_id
+        from bub.builtin.tools import SHELL_MANAGER_KEY
+
+        return {SHELL_MANAGER_KEY: self.shell_manager}
 
     @hookimpl
     def provide_tape_store(self) -> TapeStore:
-        import bub
         from bub.store import FileTapeStore
 
-        return FileTapeStore(directory=bub.home / "tapes")
+        return FileTapeStore(directory=self.framework.home / "tapes")
 
     @hookimpl
     def provide_tape_sidecar(self) -> TapeSidecar:
         from bub.builtin.spill import SpillSettings, SpillStore
-        from bub.configure import ensure_config
 
-        return SpillStore(ensure_config(SpillSettings))
+        return SpillStore(self.framework.config.ensure(SpillSettings))
 
     @hookimpl
     async def provide_lifespan(self) -> AsyncIterator[None]:
-        from bub.builtin.shell_manager import shell_manager
-
-        async with shell_manager.lifespan():
+        async with self.shell_manager.lifespan():
             yield
 
     @hookimpl(trylast=True)

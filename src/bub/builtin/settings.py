@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import re
 import sys
 from dataclasses import dataclass
@@ -13,7 +12,7 @@ from pydantic import Field, field_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
-from bub import Settings, config, ensure_config
+from bub.configure import Settings, config
 
 DEFAULT_MODEL = "openrouter:openrouter/free"
 DEFAULT_MAX_TOKENS = 16384
@@ -109,21 +108,3 @@ class AgentSettings(Settings):
         if isinstance(value, dict):
             return value.get(provider)
         return value
-
-    @property
-    def home(self) -> pathlib.Path:
-        import warnings
-
-        import bub
-
-        warnings.warn(
-            "Using the 'home' property from AgentSettings is deprecated. Please use 'bub.home' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        return bub.home
-
-
-def load_settings() -> AgentSettings:
-    return ensure_config(AgentSettings)

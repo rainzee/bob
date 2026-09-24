@@ -10,16 +10,26 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, Field
 
-from bub.builtin.shell_manager import shell_manager
+from bub.builtin.shell_manager import ShellManager
 from bub.skills import discover_skills
-from bub.tools import ToolContext, resolve_tool_names, tool
+from bub.tools import Tool, ToolContext, resolve_tool_names, tool
 
 if TYPE_CHECKING:
     from bub.builtin.agent import Agent
 
+SHELL_MANAGER_KEY = "_runtime_shell_manager"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_HEADERS = {"accept": "text/markdown"}
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
+
+
+def _shell_manager(context: ToolContext) -> ShellManager:
+    """Return the shell manager the batteries registered for this turn"""
+
+    manager = context.state.get(SHELL_MANAGER_KEY)
+    if not isinstance(manager, ShellManager):
+        raise TypeError("no shell manager in the turn state; register BatteryImpl to use the bash tools")
+    return manager
 
 
 def _raise_for_failed_shell(returncode: int | None, output: str) -> None:
@@ -85,15 +95,15 @@ async def bash(
     target_cwd = cwd or workspace
     raw_session_id = context.state.get("session_id")
     session_id = str(raw_session_id) if raw_session_id is not None else None
-    shell = await shell_manager.start(cmd=command, cwd=target_cwd, session_id=session_id)
+    shell = await _shell_manager(context).start(cmd=command, cwd=target_cwd, session_id=session_id)
     if background:
         return f"Shell started, shell_id: {shell.shell_id}\nRetrieve the output with bash_output or terminate it with bash_kill."
     try:
         async with asyncio.timeout(timeout_seconds):
-            shell = await shell_manager.wait_closed(shell.shell_id)
+            shell = await _shell_manager(context).wait_closed(shell.shell_id)
     except asyncio.CancelledError:
         with contextlib.suppress(KeyError):
-            await shell_manager.terminate(shell.shell_id)
+            await _shell_manager(context).terminate(shell.shell_id)
         raise
     except TimeoutError:
         # Cancellation during descendant cleanup waits for termination to finish.
@@ -104,12 +114,13 @@ async def bash(
     return shell.output.strip() or "(no output)"
 
 
-@tool(name="bash.output")
-async def bash_output(shell_id: str, offset: int = 0, limit: int | None = None) -> str:
+@tool(name="bash.output", context=True)
+async def bash_output(shell_id: str, offset: int = 0, limit: int | None = None, *, context: ToolContext) -> str:
     """Read buffered output from a background shell, with optional offset/limit for incremental polling."""
-    shell = shell_manager.get(shell_id)
+    manager = _shell_manager(context)
+    shell = manager.get(shell_id)
     if shell.returncode is not None:
-        await shell_manager.wait_closed(shell_id)
+        await manager.wait_closed(shell_id)
     output = shell.output
     start = max(0, min(offset, len(output)))
     end = len(output) if limit is None else min(len(output), start + max(0, limit))
@@ -119,10 +130,10 @@ async def bash_output(shell_id: str, offset: int = 0, limit: int | None = None) 
     return f"id: {shell.shell_id}\nstatus: {shell.status}\nexit_code: {exit_code}\nnext_offset: {end}\noutput:\n{body}"
 
 
-@tool(name="bash.kill")
-async def kill_bash(shell_id: str) -> str:
+@tool(name="bash.kill", context=True)
+async def kill_bash(shell_id: str, *, context: ToolContext) -> str:
     """Terminate a background shell process."""
-    shell = await shell_manager.terminate(shell_id)
+    shell = await _shell_manager(context).terminate(shell_id)
     return f"id: {shell.shell_id}\nstatus: {shell.status}\nexit_code: {shell.returncode}"
 
 
@@ -299,3 +310,22 @@ def _resolve_path(context: ToolContext, raw_path: str) -> Path:
         raise TypeError("runtime workspace must be a filesystem path")
     workspace_path = Path(workspace)
     return (workspace_path / path).resolve()
+
+
+TOOLS: tuple[Tool, ...] = (
+    bash,
+    bash_output,
+    kill_bash,
+    fs_read,
+    fs_write,
+    fs_edit,
+    skill_describe,
+    tape_info,
+    tape_search,
+    tape_reset,
+    tape_handoff,
+    tape_anchors,
+    web_fetch,
+    run_subagent,
+)
+"""Builtin tool set, in the order it is presented to the model"""

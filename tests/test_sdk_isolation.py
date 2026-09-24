@@ -66,13 +66,13 @@ async def test_sdk_recovers_only_its_store_and_honors_explicit_overrides(
 def test_instance_tool_names_resolve_aliases_and_exclusions_from_one_index() -> None:
     names = ["sdk.lookup", "sdk.other"]
     assert resolve_tool_names([" SDK_LOOKUP "], all_names=iter(names)) == {"sdk.lookup"}
-    assert resolve_tool_names(exclude=["SDK_OTHER"], all_names=iter(names)) == {"sdk.lookup"}
+    assert resolve_tool_names(None, exclude=["SDK_OTHER"], all_names=iter(names)) == {"sdk.lookup"}
     assert resolve_tool_names(["sdk_lookup"], exclude=["sdk.lookup"], all_names=names) == set()
-    assert resolve_tool_names(all_names=[]) == set()
+    assert resolve_tool_names(None, all_names=[]) == set()
     with pytest.raises(ValueError, match="bash"):
         resolve_tool_names(["bash"], all_names=names)
     with pytest.raises(ValueError, match="bash"):
-        resolve_tool_names(exclude=["bash"], all_names=names)
+        resolve_tool_names(None, exclude=["bash"], all_names=names)
 
 
 @pytest.mark.asyncio

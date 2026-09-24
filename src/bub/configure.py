@@ -8,9 +8,6 @@ CONFIG_MAP: dict[str, list[type[BaseSettings]]] = {}
 ROOT = ""
 MISSING = object()
 
-_global_config: dict[str, list[BaseSettings]] = {}
-_config_data: dict[str, Any] = {}
-
 
 class Settings(BaseSettings):
     @classmethod
@@ -39,65 +36,71 @@ def config[C: type[BaseSettings]](name: str = ROOT) -> Callable[[C], C]:
     return decorator
 
 
-def load(config_file: Path) -> dict[str, Any]:
-    """Load config from a file."""
-    import yaml
+class Config:
+    """One parsed configuration file, owned by a framework instance"""
 
-    _global_config.clear()
-    _config_data.clear()
-    if config_file.exists():
-        with config_file.open() as f:
-            _config_data.update(yaml.safe_load(f) or {})
-    return _config_data
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = {}
+        self._instances: dict[str, list[BaseSettings]] = {}
 
+    def load(self, config_file: Path) -> dict[str, Any]:
+        """Replace the loaded data with the contents of ``config_file``"""
 
-def ensure_config[C: BaseSettings](config_cls: type[C]) -> C:
-    """No-op function to ensure a config class is registered and can be imported."""
-    section = getattr(config_cls, "__config_name__", ROOT)
-    if section not in CONFIG_MAP:
-        raise ValueError(f"No config registered for section '{section}'")
+        import yaml
 
-    instances = _global_config.setdefault(section, [])
-    for instance in instances:
-        if isinstance(instance, config_cls):
-            return instance
+        self._instances.clear()
+        self._data.clear()
+        if config_file.exists():
+            with config_file.open() as f:
+                self._data.update(yaml.safe_load(f) or {})
+        return self._data
 
-    section_data = _config_data.get(section, {}) if section != ROOT else _config_data
-    instance = config_cls.model_validate(section_data)
-    instances.append(instance)
-    return instance
+    def ensure[C: BaseSettings](self, config_cls: type[C]) -> C:
+        """Return the cached instance of a registered config class, or build it"""
 
+        section = getattr(config_cls, "__config_name__", ROOT)
+        if section not in CONFIG_MAP:
+            raise ValueError(f"No config registered for section '{section}'")
 
-def get_value(path: str, default: Any = MISSING) -> Any:
-    """Get a loaded config value by dotted path, preserving registered settings behavior."""
+        instances = self._instances.setdefault(section, [])
+        for instance in instances:
+            if isinstance(instance, config_cls):
+                return instance
 
-    parts = [part for part in path.split(".") if part]
-    if not parts:
-        raise ValueError("config path must not be empty")
+        section_data = self._data.get(section, {}) if section != ROOT else self._data
+        instance = config_cls.model_validate(section_data)
+        instances.append(instance)
+        return instance
 
-    value = _lookup_registered_config(parts)
-    if value is not MISSING:
-        return value
+    def get_value(self, path: str, default: Any = MISSING) -> Any:
+        """Get a loaded config value by dotted path, preserving registered settings behavior."""
 
-    if default is not MISSING:
-        return default
-    raise KeyError(path)
+        parts = [part for part in path.split(".") if part]
+        if not parts:
+            raise ValueError("config path must not be empty")
 
-
-def _lookup_registered_config(parts: list[str]) -> Any:
-    section, *subpath = parts
-    if section in CONFIG_MAP and section != ROOT:
-        for config_cls in CONFIG_MAP[section]:
-            value = _lookup_path(ensure_config(config_cls), subpath)
-            if value is not MISSING:
-                return value
-
-    for config_cls in CONFIG_MAP.get(ROOT, []):
-        value = _lookup_path(ensure_config(config_cls), parts)
+        value = self._lookup_registered_config(parts)
         if value is not MISSING:
             return value
 
-    return MISSING
+        if default is not MISSING:
+            return default
+        raise KeyError(path)
+
+    def _lookup_registered_config(self, parts: list[str]) -> Any:
+        section, *subpath = parts
+        if section in CONFIG_MAP and section != ROOT:
+            for config_cls in CONFIG_MAP[section]:
+                value = _lookup_path(self.ensure(config_cls), subpath)
+                if value is not MISSING:
+                    return value
+
+        for config_cls in CONFIG_MAP.get(ROOT, []):
+            value = _lookup_path(self.ensure(config_cls), parts)
+            if value is not MISSING:
+                return value
+
+        return MISSING
 
 
 def _lookup_path(value: Any, parts: list[str]) -> Any:

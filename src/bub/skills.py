@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-import bub.configure as configure
+from bub.configure import Config
 
 PROJECT_SKILLS_DIR = ".agents/skills"
 LEGACY_SKILLS_DIR = ".agent/skills"
@@ -33,14 +33,14 @@ class SkillMetadata:
     source: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def body(self) -> str:
+    def body(self, config: Config | None = None) -> str:
         front_matter_pattern = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
         try:
             template_content = self.location.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
         raw_content = front_matter_pattern.sub("", template_content, count=1).strip()
-        content = _render_config_templates(raw_content)
+        content = _render_config_templates(raw_content, config)
         return string.Template(content).safe_substitute({
             "SKILL_DIR": str(self.location.parent),
             "PYTHON": sys.executable,
@@ -72,10 +72,12 @@ def discover_skills(workspace_path: Path, *, skill_dirs: Collection[Path] | None
     return sorted(skills_by_name.values(), key=lambda item: item.name.casefold())
 
 
-def _render_config_templates(content: str) -> str:
+def _render_config_templates(content: str, config: Config | None) -> str:
     def replace(match: re.Match[str]) -> str:
+        if config is None:
+            return match.group(0)
         try:
-            value = configure.get_value(match.group(1), default="")
+            value = config.get_value(match.group(1), default="")
         except KeyError:
             return match.group(0)
         if isinstance(value, str):
@@ -200,7 +202,9 @@ def iter_skill_roots(workspace_path: Path) -> list[tuple[Path, str]]:
     return roots
 
 
-def render_skills_prompt(skills: list[SkillMetadata], expanded_skills: Collection[str] = ()) -> str:
+def render_skills_prompt(
+    skills: list[SkillMetadata], expanded_skills: Collection[str] = (), config: Config | None = None
+) -> str:
     if not skills:
         return ""
     lines = ["<available_skills>"]
@@ -208,7 +212,7 @@ def render_skills_prompt(skills: list[SkillMetadata], expanded_skills: Collectio
         line = f"- {skill.name}: {skill.description}"
         if skill.name in expanded_skills:
             line += f"\n  Location: {skill.location}"
-            body = skill.body()
+            body = skill.body(config)
             if body:
                 line += f"\n{body}"
         lines.append(line)
