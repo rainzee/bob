@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
-import pluggy
 import pytest
 
 from bub.builtin.context import default_tape_context
-from bub.builtin.hook_impl import BatteryImpl
 from bub.builtin.spill import (
     SPILL_READ_MODEL_NAME,
     SPILL_READ_TOOL_NAME,
@@ -16,25 +13,16 @@ from bub.builtin.spill import (
     SpillSettings,
     SpillStore,
     spill_read,
+    spill_tool_result,
 )
-from bub.hooks import BUB_HOOK_NAMESPACE, BubHookSpecs, hookimpl
-from bub.hooks.interception import AgentHooks, ToolCall, ToolCallDecision, ToolCallResult
-from bub.hooks.runtime import HookRuntime
+from bub.hooks import Hooks, ToolCall, ToolCallResult
 from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore, TapeStore
 from bub.tape import Tape
 from bub.tools import Tool, ToolContext, ToolExecutor, model_tools, render_tools_prompt
 
 
-class _SpillHooks:
-    async def before_tool_call(self, call: ToolCall, state: dict[str, Any]) -> tuple[ToolCall, ToolCallDecision]:
-        return call, ToolCallDecision.proceed()
-
-    async def after_tool_call(self, call: ToolCall, result: ToolCallResult, state: dict[str, Any]) -> None:
-        await BatteryImpl.after_tool_call(self, call, result, state)  # type: ignore[arg-type]
-
-
 def _spill_executor() -> ToolExecutor:
-    return ToolExecutor(hooks=_SpillHooks())  # type: ignore[arg-type]
+    return ToolExecutor(hooks=Hooks(after_tool_call=[spill_tool_result]))
 
 
 def _handle_from_ref(ref: str) -> str:
@@ -177,16 +165,10 @@ async def test_oversized_structured_result_is_spilled_as_json(tmp_path: Path, ou
 
 @pytest.mark.asyncio
 async def test_spill_runs_after_other_result_hooks(tmp_path: Path) -> None:
-    class ExpandResult:
-        @hookimpl
-        def after_tool_call(self, result: ToolCallResult) -> None:
-            result.result = {"value": "x" * 20_000}
+    def expand_result(call: ToolCall, result: ToolCallResult, state: dict) -> None:
+        result.result = {"value": "x" * 20_000}
 
-    plugin_manager = pluggy.PluginManager(BUB_HOOK_NAMESPACE)
-    plugin_manager.add_hookspecs(BubHookSpecs)
-    plugin_manager.register(BatteryImpl(None), name="batteries")  # type: ignore[arg-type]
-    plugin_manager.register(ExpandResult(), name="expand-result")
-    executor = ToolExecutor(hooks=AgentHooks(HookRuntime(plugin_manager)))
+    executor = ToolExecutor(hooks=Hooks(after_tool_call=[expand_result, spill_tool_result]))
     root = _root_tape(InMemoryTapeStore(), threshold=100)
 
     async with root.fork_tape() as tape:
@@ -212,17 +194,11 @@ async def test_failure_replacement_is_used_for_spill_check(
     replacement: str,
     should_spill: bool,
 ) -> None:
-    class ReplaceFailure:
-        @hookimpl
-        def after_tool_call(self, result: ToolCallResult) -> None:
-            if result.error is not None:
-                result.result = replacement
+    def replace_failure(call: ToolCall, result: ToolCallResult, state: dict) -> None:
+        if result.error is not None:
+            result.result = replacement
 
-    plugin_manager = pluggy.PluginManager(BUB_HOOK_NAMESPACE)
-    plugin_manager.add_hookspecs(BubHookSpecs)
-    plugin_manager.register(BatteryImpl(None), name="batteries")  # type: ignore[arg-type]
-    plugin_manager.register(ReplaceFailure(), name="replace-failure")
-    executor = ToolExecutor(hooks=AgentHooks(HookRuntime(plugin_manager)))
+    executor = ToolExecutor(hooks=Hooks(after_tool_call=[replace_failure, spill_tool_result]))
     root = _root_tape(InMemoryTapeStore(), threshold=100)
 
     def fail() -> None:

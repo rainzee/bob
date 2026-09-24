@@ -7,13 +7,13 @@
   <img alt="Bub logo" src="https://raw.githubusercontent.com/bubbuild/bub/refs/heads/main/website/src/assets/bub-logo.png" width="200">
 </picture>
 
-<p><strong>A tiny agent runtime, composable with plugins.</strong></p>
+<p><strong>A tiny, plugin-free agent runtime.</strong></p>
 
 </div>
 
 Bub is a small Python runtime for building agents in shared environments. It started in group chats, where multiple humans and agents had to work in the same conversation without hidden state, hand-wavy memory, or framework-specific magic.
 
-Built on [agents.md](https://agents.md/) and [Agent Skills](https://agentskills.io/) , Bub stays intentionally small. Every turn stage is a [pluggy](https://pluggy.readthedocs.io/) hook. Builtins are included but replaceable. Bub is a library: channels, CLIs, and deployment shells are the host application's business.
+Built on [agents.md](https://agents.md/) and [Agent Skills](https://agentskills.io/) , Bub stays intentionally small. Every turn stage is a plain callback you pass in. Builtins are included but replaceable. Bub is a library: channels, CLIs, and deployment shells are the host application's business.
 
 [GitHub](https://github.com/rainzee/bob)
 
@@ -27,8 +27,8 @@ uv add bub
 import asyncio
 from pathlib import Path
 
-from bub import BubFramework, Config
-from bub.builtin import Agent, battery_tools
+from bub import BubFramework, Config, Hooks
+from bub.builtin import Agent, Battery, BuiltinHooks, battery_tools
 
 
 async def main() -> None:
@@ -37,8 +37,15 @@ async def main() -> None:
         home=Path("./run"),
         config=Config({"model": "openai:gpt-5", "api_key": "sk-..."}),
     )
-    # batteries=True adds the file tape store, tool-output spill, and shell lifecycle.
-    framework.load_builtin_hooks(batteries=True)
+    framework.add_hooks(BuiltinHooks(framework).hooks)
+
+    # Batteries are optional and come apart: take any of store, sidecars and lifespans.
+    battery = Battery(home=framework.home, config=framework.config)
+    framework.add_hooks(battery.hooks)
+    framework.add_tape_store(battery.tape_store)
+    framework.add_sidecars(*battery.sidecars)
+    framework.add_lifespans(*battery.lifespans)
+
     agent = Agent(framework, tools=battery_tools(), skill_dirs=[Path("./skills")])
     async with framework.running():
         stream = await agent.run_stream(session_id="demo", prompt="Hello")
@@ -51,9 +58,9 @@ asyncio.run(main())
 ```
 
 `battery_tools()` is the builtin tool set (bash, fs.*, tape.*, web.fetch, subagent,
-spill reader). Without `batteries=True` the default hooks own only the turn
-pipeline and provide no tape store, and `Agent` starts with whatever tools you
-pass; build your own with `@tool` / `Tool.from_callable` and inject storage with
+spill reader). `BuiltinHooks` owns only the turn pipeline; without `Battery` the
+runtime has no tape store and `Agent` starts with whatever tools you pass. Build
+your own with `@tool` / `Tool.from_callable` and inject storage with
 `tape_store=FileTapeStore("sessions")`.
 
 Everything is instance-scoped and explicit. `BubFramework` takes `workspace`,
@@ -71,7 +78,7 @@ From a checkout, `uv sync` is enough; `make install` is a thin wrapper around it
 
 ## Why Bub
 
-- **Composable by design.** Every turn stage is a plugin hook. Override one stage or replace the whole flow without forking the runtime.
+- **Composable by design.** Every turn stage is an ordered list of callbacks. Override one stage or replace the whole flow without forking the runtime.
 - **Tape context.** Context is rebuilt from append-only records, not carried around as mutable session state. Easier to inspect, replay, and hand off.
 - **Surface-agnostic.** The runtime owns the turn; the host owns I/O. No channel, REPL, transport, or message envelope is baked in.
 - **Batteries optional.** Tools, skills, tape stores, and model execution ship with the runtime, but the batteries are opt-in and the tool set is passed to each agent explicitly.
@@ -89,51 +96,67 @@ build_state → agent loop → model stream
           (same tape)      tool calls
 ```
 
-Each stage is a hook, so a plugin can contribute state, system prompt, or tool
-interception without forking the runtime. A continuation step sends no new user
-message: the tape already ends with the assistant tool calls and their results,
-so the loop just asks the model again. Builtins are registered first and
-external plugins load after them, so later plugins take precedence.
+Each stage is a slot on a `Hooks` value, so the host contributes state, system
+prompt, or tool interception without forking the runtime. Callbacks run in list
+order and later entries win; async and sync callbacks are both accepted; a
+failing callback raises. A continuation step sends no new user message: the tape
+already ends with the assistant tool calls and their results, so the loop just
+asks the model again.
 
 Key source files:
 
 - Composition root: [`src/bub/framework.py`](https://github.com/bubbuild/bub/blob/main/src/bub/framework.py)
-- Hook contract: [`src/bub/hooks/specs.py`](https://github.com/bubbuild/bub/blob/main/src/bub/hooks/specs.py)
+- Hook contract: [`src/bub/hooks.py`](https://github.com/bubbuild/bub/blob/main/src/bub/hooks.py)
 - Agent loop: [`src/bub/builtin/agent.py`](https://github.com/bubbuild/bub/blob/main/src/bub/builtin/agent.py)
-- Builtin hooks: [`src/bub/builtin/hook_impl.py`](https://github.com/bubbuild/bub/blob/main/src/bub/builtin/hook_impl.py)
+- Builtin hooks: [`src/bub/builtin/hooks.py`](https://github.com/bubbuild/bub/blob/main/src/bub/builtin/hooks.py)
 - Skill discovery: [`src/bub/skills.py`](https://github.com/bubbuild/bub/blob/main/src/bub/skills.py)
 
 ## Extend It
 
+There is no registry, no discovery and no name lookup. Append callbacks to the
+slots you care about:
+
 ```python
-from bub import hookimpl
+from pathlib import Path
+
+from bub import BubFramework, Hooks
+from bub.builtin import Agent, Battery, BuiltinHooks
+
+framework = BubFramework(workspace=Path("."), home=Path(".bub"), config=Config.from_file(Path("config.yml")))
+framework.add_hooks(BuiltinHooks(framework).hooks)
+
+battery = Battery(home=framework.home, config=framework.config)
+framework.add_hooks(battery.hooks)
+framework.add_tape_store(battery.tape_store)
+framework.add_sidecars(*battery.sidecars)
+framework.add_lifespans(*battery.lifespans)
 
 
-class AuditPlugin:
-    @hookimpl
-    def system_prompt(self, prompt, state):
-        return "Answer in one paragraph."
-
-    @hookimpl
-    async def after_tool_call(self, call, result, state):
-        print("tool ran:", call.tool)
+def one_paragraph(prompt, state):
+    return "Answer in one paragraph."
 
 
-audit_plugin = AuditPlugin()
+async def audit(call, result, state):
+    print("tool ran:", call.tool)
+
+
+framework.add_hooks(Hooks(system_prompt=[one_paragraph], after_tool_call=[audit]))
+
+agent = Agent(framework, tools=battery_tools())
+async with framework.running():
+    ...
 ```
 
-```toml
-[project.entry-points."bub"]
-audit = "my_package.plugin:audit_plugin"
-```
-
-See the [Build docs](https://bub.build/docs/build/) for hook guides, packaging, and plugin structure.
+`Battery` is optional and comes apart: `hooks`, `tape_store`, `sidecars` and
+`lifespans` each go into their own slot, so you can take the file store without
+the shell manager, or the spill sidecar without the store.
 
 ## Configuration
 
 Configuration is a mapping passed to `Config`, either directly or through
 `Config.from_file(path)`. Nothing is read from the environment. The root section
-is `AgentSettings`; other sections belong to plugins registered with `@config`.
+is `AgentSettings`; other sections belong to settings classes registered with
+`@config`.
 
 | Key                     | Default    | Description                                             |
 | ----------------------- | ---------- | ------------------------------------------------------- |
@@ -171,7 +194,7 @@ Read more:
 - [Getting Started](https://bub.build/docs/getting-started/) — install Bub and run the first turn
 - [Concepts](https://bub.build/docs/concepts/) — the mental model behind the runtime
 - [Skills](https://bub.build/docs/build/skills/) — discover, inspect, and author Agent Skills in Bub
-- [Build](https://bub.build/docs/build/) — write plugins, override hooks, ship tools and skills
+- [Build](https://bub.build/docs/build/) — write hooks, ship tools and skills
 
 Some of these pages describe the upstream CLI and channel packages that this repository no longer ships.
 

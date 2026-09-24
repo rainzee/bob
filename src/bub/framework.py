@@ -5,160 +5,101 @@ from __future__ import annotations
 import contextlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
-
-import pluggy
-from loguru import logger
 
 from bub.configure import Config
-from bub.hooks.interception import AgentHooks
-from bub.hooks.runtime import HookRuntime
-from bub.hooks.specs import BUB_HOOK_NAMESPACE, BubHookSpecs
+from bub.hooks import Hooks
 from bub.sidecars import TapeSidecar
 from bub.store import AsyncTapeStore, TapeStore
-from bub.tape import TapeContext
 from bub.turn import TurnState
-from bub.utils import maybe_context_manager
+from bub.utils import LifespanFactory, maybe_context_manager
 
 
 class BubFramework:
-    """Minimal framework core. Everything grows from hook skills."""
+    """Composition root: explicit paths, configuration, resources and callbacks
+
+    The host assembles the runtime by hand -- there is no registry, no discovery and
+    no name lookup. Every contribution goes through one of the named slots below.
+    """
 
     def __init__(self, *, workspace: Path, home: Path, config: Config | None = None) -> None:
-        """Create a hook runtime with explicitly configured paths and configuration.
+        """Create a runtime from explicitly configured paths and configuration.
 
         Args:
             workspace: Directory turns and skill discovery resolve against.
             home: Directory the runtime may write tapes under.
             config: Explicit configuration; defaults to empty configuration.
-
-        Register plugins or load builtin hooks before executing turns;
-        construction does not load them.
         """
         self.workspace = workspace.expanduser().resolve()
         self.home = home.expanduser().resolve()
         self.config = config if config is not None else Config()
-        self._plugin_manager = pluggy.PluginManager(BUB_HOOK_NAMESPACE)
-        self._plugin_manager.add_hookspecs(BubHookSpecs)
-        self._hook_runtime = HookRuntime(self._plugin_manager)
-        self._agent_hooks = AgentHooks(self._hook_runtime)
+        self.hooks = Hooks()
         self._tape_store: TapeStore | AsyncTapeStore | None = None
+        self._active_tape_store: TapeStore | AsyncTapeStore | None = None
+        self._sidecars: dict[str, TapeSidecar] = {}
+        self._lifespans: list[LifespanFactory] = []
 
-    @property
-    def plugin_manager(self) -> pluggy.PluginManager:
-        return self._plugin_manager
+    def add_hooks(self, hooks: Hooks) -> None:
+        """Append one set of callbacks; later callbacks run and win over earlier ones."""
 
-    def load_builtin_hooks(self, *, batteries: bool = False) -> None:
-        """Load Bub's builtin hook implementations.
+        self.hooks = self.hooks + hooks
 
-        Set ``batteries=True`` to also register the optional file tape store,
-        tool-output spill, and shell lifecycle hooks.
+    def add_tape_store(self, store: TapeStore | AsyncTapeStore | None) -> None:
+        """Declare the default store turns use; it is entered by ``running()``.
+
+        The value may be a store, or an iterator yielding the store when the store
+        owns resources that need entering and exiting around a lifespan.
         """
-        from bub.builtin.hook_impl import BatteryImpl, BuiltinImpl
 
-        try:
-            self._plugin_manager.register(BuiltinImpl(self), name="builtin")
-            if batteries:
-                self._plugin_manager.register(BatteryImpl(self), name="batteries")
-        except Exception as exc:
-            logger.warning("Failed to load builtin hooks: {}", exc)
+        self._tape_store = store
 
-    def load_hooks(self, *, batteries: bool = False) -> None:
-        """Load builtin hooks, then plugins from the ``bub`` entry-point group.
+    def add_sidecars(self, *sidecars: TapeSidecar) -> None:
+        """Mount sidecars; a later sidecar with the same name replaces an earlier one."""
 
-        Callable entry points receive this framework. A plugin that fails to load
-        or initialize is logged and skipped so the remaining plugins still load.
+        for sidecar in sidecars:
+            self._sidecars[sidecar.name] = sidecar
+
+    def add_lifespans(self, *lifespans: LifespanFactory) -> None:
+        """Register factories started by ``running()`` and stopped when it exits."""
+
+        self._lifespans.extend(lifespans)
+
+    @contextlib.asynccontextmanager
+    async def running(self) -> AsyncGenerator[contextlib.AsyncExitStack, None]:
+        """Acquire the registered lifespans and the default store.
+
+        Yield an AsyncExitStack for additional application resources. Exit closes
+        acquired context managers and clears the runtime's active store.
+        Enter before an Agent first accesses its cached tape; avoid overlapping
+        lifespans on the same framework instance.
         """
-        import importlib.metadata
-
-        pending_plugins: list[tuple[str, Any]] = []
-
-        self.load_builtin_hooks(batteries=batteries)
-        for entry_point in importlib.metadata.entry_points(group="bub"):
+        async with contextlib.AsyncExitStack() as stack:
+            for lifespan in self._lifespans:
+                await maybe_context_manager(lifespan(), stack)
+            self._active_tape_store = await maybe_context_manager(self._tape_store, stack)
             try:
-                plugin = entry_point.load()
-            except Exception as exc:
-                logger.warning(f"Failed to load plugin '{entry_point.name}': {exc}")
-            else:
-                pending_plugins.append((entry_point.name, plugin))
+                yield stack
+            finally:
+                self._active_tape_store = None
 
-        for plugin_name, plugin in pending_plugins:
-            try:
-                if callable(plugin):  # Support entry points that are classes
-                    plugin = plugin(self)
-                self._plugin_manager.register(plugin, name=plugin_name)
-            except Exception as exc:
-                logger.warning(f"Failed to initialize plugin '{plugin_name}': {exc}")
+    def get_tape_store(self) -> TapeStore | AsyncTapeStore | None:
+        """Return the store acquired by ``running()``, or None when unavailable."""
+
+        return self._active_tape_store
+
+    def get_tape_sidecars(self) -> tuple[TapeSidecar, ...]:
+        """Return the mounted sidecars in first-seen order."""
+
+        return tuple(self._sidecars.values())
 
     async def build_state(self, session_id: str, state: TurnState | None = None) -> TurnState:
-        """Resolve one session's turn state from defaults, seeds, and load-state hooks.
+        """Resolve one session's turn state from defaults, seeds, and load-state callbacks.
 
         Args:
             session_id: Session identity within the workspace.
             state: Values the caller already knows, for example ``_runtime_agent``.
 
-        Hooks receive the accumulated state and may return a partial update;
-        higher-priority hooks override lower-priority values.
+        Callbacks receive the accumulated state and may return a partial update;
+        later callbacks override earlier ones.
         """
         resolved: TurnState = {"_runtime_workspace": str(self.workspace), **(state or {})}
-        for hook_state in reversed(
-            await self._hook_runtime.call_many("load_state", session_id=session_id, state=resolved)
-        ):
-            if isinstance(hook_state, dict):
-                resolved.update(hook_state)
-        return resolved
-
-    @contextlib.asynccontextmanager
-    async def running(self) -> AsyncGenerator[contextlib.AsyncExitStack, None]:
-        """Acquire hook-provided stores and resources for an application lifespan.
-
-        Yield an AsyncExitStack for additional application resources. Exit closes
-        acquired context managers and clears the framework's resource references.
-        Enter before an Agent first accesses its cached tape; avoid overlapping
-        lifespans on the same framework instance.
-        """
-        async with contextlib.AsyncExitStack() as stack:
-            for lifespan in self._hook_runtime.call_many_sync("provide_lifespan"):
-                await maybe_context_manager(lifespan, stack)
-            tape_store = self._hook_runtime.call_first_sync("provide_tape_store")
-            # Allow plugins to return either TapeStore/AsyncTapeStore instances or context managers for them
-            # This benefits plugins that need to initialize and clean up resources with the tape store.
-            self._tape_store = await maybe_context_manager(tape_store, stack)
-            try:
-                yield stack
-            finally:
-                self._tape_store = None
-
-    def get_tape_store(self) -> TapeStore | AsyncTapeStore | None:
-        """Return the store acquired by ``running()``, or None when unavailable."""
-        return self._tape_store
-
-    def get_tape_sidecars(self) -> tuple[TapeSidecar, ...]:
-        """Collect tape sidecars, keeping the highest-priority provider for each name."""
-        sidecars: dict[str, TapeSidecar] = {}
-        for sidecar in self._hook_runtime.call_many_sync("provide_tape_sidecar"):
-            sidecars.setdefault(sidecar.name, sidecar)
-        return tuple(sidecars.values())
-
-    def get_agent_hooks(self) -> AgentHooks:
-        """Return the model and tool interception adapter for this framework's hooks."""
-        return self._agent_hooks
-
-    def get_system_prompt(self, prompt: str | list[dict], state: TurnState) -> str:
-        """Join nonempty system-prompt hook results from low to high priority.
-
-        Hooks contribute additional blocks; a higher-priority hook does not replace
-        a lower-priority prompt. Blocks are separated by blank lines.
-        """
-        return "\n\n".join(
-            result
-            for result in reversed(self._hook_runtime.call_many_sync("system_prompt", prompt=prompt, state=state))
-            if result
-        )
-
-    def build_tape_context(self) -> TapeContext:
-        """Get the highest-priority tape context, raising TypeError if none is valid."""
-        context = self._hook_runtime.call_first_sync("build_tape_context")
-        if isinstance(context, TapeContext):
-            return context
-        raise TypeError("hook.build_tape_context must return TapeContext")
+        return await self.hooks.run_load_state(session_id, resolved)

@@ -1,5 +1,8 @@
-from .agent import Agent
-from .tools import TOOLS
+from __future__ import annotations
+
+from bub.builtin.agent import Agent
+from bub.builtin.hooks import Battery, BuiltinHooks
+from bub.builtin.tools import TOOLS
 
 
 def battery_tools() -> tuple:
@@ -10,4 +13,4 @@ def battery_tools() -> tuple:
     return (*TOOLS, spill_read)
 
 
-__all__ = ["Agent", "battery_tools"]
+__all__ = ["Agent", "Battery", "BuiltinHooks", "battery_tools"]

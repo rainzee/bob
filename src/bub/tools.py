@@ -6,18 +6,15 @@ import json
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, overload
+from typing import Any, overload
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, validate_call
 
 from bub.errors import BubError, ErrorKind
-from bub.hooks.interception import ToolCall, ToolCallResult
+from bub.hooks import Hooks, ToolCall, ToolCallResult
 from bub.tape import Tape
 from bub.tracing import Span
-
-if TYPE_CHECKING:
-    from bub.hooks.interception import AgentHooks
 
 
 @dataclass(frozen=True)
@@ -239,7 +236,7 @@ class _FailedToolResult:
 class ToolExecutor:
     """Execute already-resolved Bub tool invocations."""
 
-    def __init__(self, hooks: AgentHooks | None = None) -> None:
+    def __init__(self, hooks: Hooks | None = None) -> None:
         self._hooks = hooks
 
     async def execute_async(
@@ -396,7 +393,7 @@ class ToolExecutor:
 
         if self._hooks is None:
             return call, None
-        call, decision = await self._hooks.before_tool_call(call, state=hook_state)
+        call, decision = await self._hooks.run_before_tool_call(call, hook_state)
         if decision.action == "deny":
             error = BubError(
                 ErrorKind.TOOL,
@@ -428,7 +425,7 @@ class ToolExecutor:
             duration_ms=duration_ms,
         )
         if self._hooks is not None:
-            await self._hooks.after_tool_call(call, outcome, state=state)
+            await self._hooks.run_after_tool_call(call, outcome, state)
         return outcome
 
 

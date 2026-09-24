@@ -1,18 +1,15 @@
-from collections.abc import AsyncIterator
 from difflib import get_close_matches
+from pathlib import Path
 from typing import Any, cast
 
 from bub.builtin.agent import Agent
-from bub.builtin.context import default_tape_context, render_tool_result
-from bub.errors import BubError
+from bub.configure import Config
 from bub.framework import BubFramework
-from bub.hooks import hookimpl
-from bub.hooks.interception import ToolCall, ToolCallDecision, ToolCallResult
+from bub.hooks import Hooks, ToolCall, ToolCallDecision
 from bub.sidecars import TapeSidecar
 from bub.store import TapeStore
-from bub.tape import TapeContext
 from bub.turn import TurnState
-from bub.utils import workspace_from_state
+from bub.utils import LifespanFactory, workspace_from_state
 
 AGENTS_FILE_NAME = "AGENTS.md"
 DEFAULT_SYSTEM_PROMPT = """\
@@ -25,12 +22,20 @@ Excessively long context may cause model call failures. In this case, you MAY us
 """
 
 
-class BuiltinImpl:
-    """Default hook implementations for the turn pipeline"""
+class BuiltinHooks:
+    """Default callbacks for the turn pipeline: session state, system prompt, unknown tools"""
 
     def __init__(self, framework: BubFramework) -> None:
         self.framework = framework
         self._agent: Agent | None = None
+
+    @property
+    def hooks(self) -> Hooks:
+        return Hooks(
+            load_state=[self.load_state],
+            system_prompt=[self.system_prompt],
+            before_tool_call=[self.before_tool_call],
+        )
 
     def _get_agent(self, state: TurnState | None = None) -> Agent:
         if state and "_runtime_agent" in state:
@@ -66,7 +71,6 @@ class BuiltinImpl:
                 return str(reasoning_effort) if reasoning_effort else None
         return None
 
-    @hookimpl
     async def load_state(self, session_id: str, state: TurnState) -> TurnState:
         agent = state.get("_runtime_agent")
         if not isinstance(agent, Agent):
@@ -90,21 +94,10 @@ class BuiltinImpl:
         except OSError:
             return ""
 
-    @hookimpl
     def system_prompt(self, prompt: str | list[dict], state: TurnState) -> str:
-        # Read the content of AGENTS.md under workspace
         return DEFAULT_SYSTEM_PROMPT + "\n\n" + self._read_agents_file(state)
 
-    @hookimpl
-    def build_tape_context(self) -> TapeContext:
-        return default_tape_context()
-
-    @hookimpl
-    async def before_tool_call(
-        self,
-        call: ToolCall,
-        state: TurnState,
-    ) -> ToolCallDecision | None:
+    async def before_tool_call(self, call: ToolCall, state: TurnState) -> ToolCallDecision | None:
         """Recover hallucinated/unknown tool names without interrupting the turn.
 
         When the model invokes a tool outside the current model-facing tool set,
@@ -130,72 +123,48 @@ class BuiltinImpl:
         return ToolCallDecision.replace(guidance)
 
 
-class BatteryImpl:
-    """Optional builtin batteries: file tape store, tool-output spill, shell lifecycle
+class Battery:
+    """Optional batteries: file tape store, tool-output spill, shell lifecycle
 
-    Register this beside ``BuiltinImpl`` to opt into the batteries; the default
-    builtin hooks keep the runtime free of them.
+    Install each piece explicitly: ``hooks`` into the framework or an agent, and the
+    store, sidecars and lifespans into the framework's matching slot.
     """
 
-    def __init__(self, framework: BubFramework) -> None:
+    def __init__(self, *, home: Path, config: Config) -> None:
         from bub.builtin.shell_manager import ShellManager
 
-        self.framework = framework
+        self.home = home
+        self.config = config
         self.shell_manager = ShellManager()
 
-    @hookimpl
-    def load_state(self, session_id: str, state: TurnState) -> dict[str, Any]:
-        del session_id, state
-        from bub.builtin.tools import SHELL_MANAGER_KEY
+    @property
+    def hooks(self) -> Hooks:
+        from bub.builtin.spill import spill_tool_result
 
-        return {SHELL_MANAGER_KEY: self.shell_manager}
+        # spill 排在最后, 这样它拿到的是其它回调改写过的最终结果
+        return Hooks(load_state=[self.load_state], after_tool_call=[spill_tool_result])
 
-    @hookimpl
-    def provide_tape_store(self) -> TapeStore:
+    @property
+    def tape_store(self) -> TapeStore:
         from bub.store import FileTapeStore
 
-        return FileTapeStore(directory=self.framework.home / "tapes")
+        return FileTapeStore(directory=self.home / "tapes")
 
-    @hookimpl
-    def provide_tape_sidecar(self) -> TapeSidecar:
+    @property
+    def sidecars(self) -> tuple[TapeSidecar, ...]:
         from bub.builtin.spill import SpillSettings, SpillStore
 
-        return SpillStore(self.framework.config.ensure(SpillSettings))
+        return (SpillStore(self.config.ensure(SpillSettings)),)
 
-    @hookimpl
-    async def provide_lifespan(self) -> AsyncIterator[None]:
-        async with self.shell_manager.lifespan():
-            yield
+    @property
+    def lifespans(self) -> tuple[LifespanFactory, ...]:
+        return (self.shell_manager.lifespan,)
 
-    @hookimpl(trylast=True)
-    async def after_tool_call(
-        self,
-        call: ToolCall,
-        result: ToolCallResult,
-        state: TurnState,
-    ) -> None:
-        from bub.builtin.spill import SPILL_SIDECAR_NAME, SpillStore
+    def load_state(self, session_id: str, state: TurnState) -> dict[str, Any]:
+        from bub.builtin.tools import SHELL_MANAGER_KEY
 
-        tape = state.get("_runtime_tape")
-        if tape is None:
-            return
-        spill = tape.get_sidecar(SPILL_SIDECAR_NAME)
-        if not isinstance(spill, SpillStore):
-            return
+        del session_id, state
+        return {SHELL_MANAGER_KEY: self.shell_manager}
 
-        if result.error is None:
-            tool_result = result.result
-        elif isinstance(result.error, BubError):
-            tool_result = result.error.as_dict() if result.result is None else result.result
-        else:
-            return
 
-        rendered_result = render_tool_result(tool_result)
-        bounded_result = await spill.spill_tool_result(
-            tape,
-            rendered_result,
-            tool=call.tool,
-            run_id=call.run_id,
-        )
-        if isinstance(tool_result, str) or bounded_result != rendered_result:
-            result.result = bounded_result
+__all__ = ["AGENTS_FILE_NAME", "DEFAULT_SYSTEM_PROMPT", "Battery", "BuiltinHooks"]

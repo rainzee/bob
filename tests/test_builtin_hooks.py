@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from bub.builtin import battery_tools
-from bub.builtin.hook_impl import (
+from bub.builtin.hooks import (
     AGENTS_FILE_NAME,
     DEFAULT_SYSTEM_PROMPT,
-    BatteryImpl,
-    BuiltinImpl,
+    Battery,
+    BuiltinHooks,
 )
 from bub.configure import Config
 from bub.framework import BubFramework
@@ -60,13 +60,13 @@ def _raise_value_error() -> None:
     raise ValueError("boom")
 
 
-def _build_impl(tmp_path: Path, config: Config | None = None) -> tuple[BubFramework, BuiltinImpl, FakeAgent]:
+def _build_impl(tmp_path: Path, config: Config | None = None) -> tuple[BubFramework, BuiltinHooks, FakeAgent]:
     framework = BubFramework(
         workspace=tmp_path,
         home=tmp_path,
         config=config if config is not None else Config({"model": "test:model"}),
     )
-    impl = BuiltinImpl(framework)
+    impl = BuiltinHooks(framework)
     agent = FakeAgent(tmp_path)
     impl._agent = agent
     return framework, impl, agent
@@ -150,20 +150,35 @@ def test_system_prompt_ignores_missing_agents_file(tmp_path: Path) -> None:
     assert result == DEFAULT_SYSTEM_PROMPT + "\n\n"
 
 
-def test_battery_impl_provides_file_tape_store(tmp_path: Path) -> None:
-    framework = BubFramework(workspace=tmp_path, home=tmp_path)
-
-    store = BatteryImpl(framework).provide_tape_store()
+def test_battery_provides_file_tape_store(tmp_path: Path) -> None:
+    store = Battery(home=tmp_path, config=Config()).tape_store
 
     assert isinstance(store, FileTapeStore)
     assert store._directory == tmp_path / "tapes"
+
+
+def test_battery_exposes_store_sidecars_lifespans_and_hooks(tmp_path: Path) -> None:
+    battery = Battery(home=tmp_path, config=Config())
+
+    assert [sidecar.name for sidecar in battery.sidecars] == ["spill"]
+    assert battery.lifespans == (battery.shell_manager.lifespan,)
+    assert battery.hooks.after_tool_call != ()
+    assert battery.hooks.load_state == [battery.load_state]
+
+
+def test_builtin_hooks_expose_the_three_seams(tmp_path: Path) -> None:
+    _, impl, _ = _build_impl(tmp_path)
+
+    assert impl.hooks.load_state == [impl.load_state]
+    assert impl.hooks.system_prompt == [impl.system_prompt]
+    assert impl.hooks.before_tool_call == [impl.before_tool_call]
 
 
 def test_before_tool_call_ignores_known_tool(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
     import asyncio
 
-    from bub.hooks.interception import ToolCall
+    from bub.hooks import ToolCall
 
     async def _do():
         return await impl.before_tool_call(ToolCall(run_id="r", tool="bash", arguments={}), state={})
@@ -175,7 +190,7 @@ def test_before_tool_call_ignores_known_model_alias(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
     import asyncio
 
-    from bub.hooks.interception import ToolCall
+    from bub.hooks import ToolCall
 
     async def _do():
         return await impl.before_tool_call(ToolCall(run_id="r", tool="bash_output", arguments={}), state={})
@@ -187,7 +202,7 @@ def test_before_tool_call_recovers_unknown_tool(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
     import asyncio
 
-    from bub.hooks.interception import ToolCall
+    from bub.hooks import ToolCall
 
     async def _do():
         return await impl.before_tool_call(ToolCall(run_id="r", tool="tepadr", arguments={}), state={})
@@ -202,7 +217,7 @@ def test_before_tool_call_suggests_close_model_tool_name(tmp_path: Path) -> None
     _, impl, _ = _build_impl(tmp_path)
     import asyncio
 
-    from bub.hooks.interception import ToolCall
+    from bub.hooks import ToolCall
 
     async def _do():
         return await impl.before_tool_call(ToolCall(run_id="r", tool="fs_reed", arguments={}), state={})

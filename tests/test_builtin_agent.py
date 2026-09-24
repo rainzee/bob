@@ -14,6 +14,7 @@ from bub.builtin.agent import Agent
 from bub.builtin.model_runner import ModelRunner
 from bub.builtin.settings import AgentSettings
 from bub.errors import BubError
+from bub.hooks import Hooks
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import TapeContext
 from bub.tools import tool
@@ -37,13 +38,8 @@ def _make_agent() -> Agent:
     """Build an Agent with a mocked framework, bypassing real LLM/tape init."""
     framework = MagicMock()
     framework.get_tape_store.return_value = None
-    framework.get_system_prompt.return_value = ""
+    framework.hooks = Hooks()
     framework.get_tape_sidecars.return_value = ()
-
-    async def build_prompt(message: dict[str, Any], session_id: str, state: dict[str, Any]) -> str:
-        return str(message["content"])
-
-    framework.build_prompt = build_prompt
 
     with patch.object(Agent, "__init__", lambda self, fw: None):
         agent = Agent.__new__(Agent)
@@ -53,6 +49,9 @@ def _make_agent() -> Agent:
     agent.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
     agent.tape_store = None
     agent.skill_dirs = ()
+    agent.tape_context = TapeContext(state={})
+    agent.sidecars = ()
+    agent.hooks = Hooks()
     agent.model_runner = _FakeModelRunner(agent.settings)
     return agent
 

@@ -12,13 +12,13 @@ MISSING = object()
 
 
 class Settings(BaseModel):
-    """Base for plugin settings; values come only from explicit configuration"""
+    """Base for section settings; values come only from explicit configuration"""
 
     model_config = ConfigDict(extra="ignore")
 
 
 def config[C: type[BaseModel]](name: str = ROOT) -> Callable[[C], C]:
-    """Decorator to register a config class for a plugin."""
+    """Decorator to register a settings class under a configuration section."""
 
     def decorator(cls: C) -> C:
         cls.__config_name__ = name  # type: ignore[attr-defined]

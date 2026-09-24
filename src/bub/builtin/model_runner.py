@@ -30,12 +30,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from bub.builtin.settings import AgentSettings, ModelCandidate
 from bub.errors import BubError, ErrorKind
-from bub.hooks.interception import (
-    AgentHooks,
-    LlmCallDecision,
-    LlmCallRequest,
-    LlmCallResult,
-)
+from bub.hooks import Hooks, LlmCallDecision, LlmCallRequest, LlmCallResult
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape
 from bub.tools import Tool, ToolContext, ToolExecutor
@@ -112,7 +107,7 @@ def _adapt_messages_for_provider(messages: list[dict[str, Any]], provider: LLMPr
 
 
 class ModelRunner:
-    def __init__(self, settings: AgentSettings, hooks: AgentHooks | None = None) -> None:
+    def __init__(self, settings: AgentSettings, hooks: Hooks | None = None) -> None:
         self.settings = settings
         self.hooks = hooks
 
@@ -202,7 +197,7 @@ class ModelRunner:
             )
             decision: LlmCallDecision | None = None
             if self.hooks is not None:
-                request, decision = await self.hooks.before_llm_call(request, state=tape.context.state)
+                request, decision = await self.hooks.run_before_llm_call(request, tape.context.state)
             if decision is not None:
                 await self.record_chat(
                     tape=tape,
@@ -380,7 +375,7 @@ class ModelRunner:
             error=error,
             duration_ms=duration_ms,
         )
-        await self.hooks.after_llm_call(request, result, state=tape.context.state)
+        await self.hooks.run_after_llm_call(request, result, tape.context.state)
 
     async def build_messages(
         self,

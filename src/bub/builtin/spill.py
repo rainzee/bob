@@ -12,9 +12,11 @@ from pydantic import ConfigDict, Field
 from bub import config
 from bub.configure import Settings
 from bub.errors import BubError, ErrorKind
+from bub.hooks import ToolCall, ToolCallResult
 from bub.store import TapeQuery
 from bub.tape import Tape, TapeEntry
 from bub.tools import ToolContext, tool
+from bub.turn import TurnState
 
 SPILL_READ_TOOL_NAME = "spill.read"
 SPILL_READ_MODEL_NAME = SPILL_READ_TOOL_NAME.replace(".", "_")
@@ -22,6 +24,39 @@ SPILL_CHUNK_BYTES = 16_384
 MAX_READ_CHUNKS = 4
 PREVIEW_CHARS = 600
 SPILL_SIDECAR_NAME = "spill"
+
+
+async def spill_tool_result(call: ToolCall, result: ToolCallResult, state: TurnState) -> None:
+    """把过大的工具结果搬进 spill sidecar, 让模型只看到 bounded 的 handle
+
+    必须排在其它 ``after_tool_call`` 回调之后, 这样它看到的是已被改写过的最终结果
+    """
+
+    from bub.builtin.context import render_tool_result
+
+    tape = state.get("_runtime_tape")
+    if tape is None:
+        return
+    spill = tape.get_sidecar(SPILL_SIDECAR_NAME)
+    if not isinstance(spill, SpillStore):
+        return
+
+    if result.error is None:
+        tool_result = result.result
+    elif isinstance(result.error, BubError):
+        tool_result = result.error.as_dict() if result.result is None else result.result
+    else:
+        return
+
+    rendered_result = render_tool_result(tool_result)
+    bounded_result = await spill.spill_tool_result(
+        tape,
+        rendered_result,
+        tool=call.tool,
+        run_id=call.run_id,
+    )
+    if isinstance(tool_result, str) or bounded_result != rendered_result:
+        result.result = bounded_result
 
 
 @config(name="spill")

@@ -1,10 +1,20 @@
-from collections.abc import AsyncIterator, Iterator
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    AsyncExitStack,
+    asynccontextmanager,
+    contextmanager,
+)
 from pathlib import Path
 from typing import Any
 
 from bub.tape import TapeEntry
 from bub.turn import TurnState
+
+type Lifespan = AsyncIterator[None] | AbstractAsyncContextManager[None] | Iterator[None] | AbstractContextManager[None]
+type LifespanFactory = Callable[[], Lifespan]
+type MaybeAwait[T] = T | Awaitable[T]
 
 
 def workspace_from_state(state: TurnState) -> Path:
@@ -23,9 +33,14 @@ def get_entry_text(entry: TapeEntry) -> str:
 
 
 async def maybe_context_manager(obj: Any, stack: AsyncExitStack) -> Any:
-    """Enter the context manager if the obj is any kind of iterator, otherwise return the obj as is."""
+    """Enter any flavour of context manager or generator; return anything else as is."""
+
+    if hasattr(obj, "__aenter__"):
+        return await stack.enter_async_context(obj)
+    if hasattr(obj, "__enter__"):
+        return stack.enter_context(obj)
     if isinstance(obj, AsyncIterator):
-        obj = await stack.enter_async_context(asynccontextmanager(lambda: obj)())
-    elif isinstance(obj, Iterator):
-        obj = stack.enter_context(contextmanager(lambda: obj)())
+        return await stack.enter_async_context(asynccontextmanager(lambda: obj)())
+    if isinstance(obj, Iterator):
+        return stack.enter_context(contextmanager(lambda: obj)())
     return obj

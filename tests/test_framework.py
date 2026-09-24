@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import importlib.metadata
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -11,37 +9,52 @@ from conftest import DemoSettings
 from bub.builtin.settings import AgentSettings
 from bub.configure import Config
 from bub.framework import BubFramework
-from bub.hooks import hookimpl
+from bub.hooks import Hooks
 
 
-def test_get_system_prompt_uses_priority_order_and_skips_empty_results(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_hooks_are_appended_in_order_and_join_system_prompts(tmp_path: Path) -> None:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
-    class LowPriorityPlugin:
-        @hookimpl
-        def system_prompt(self, prompt: str, state: dict[str, str]) -> str:
-            return "low"
+    def low(prompt: str, state: dict[str, str]) -> str:
+        return "low"
 
-    class HighPriorityPlugin:
-        @hookimpl
-        def system_prompt(self, prompt: str, state: dict[str, str]) -> str | None:
-            return "high"
+    async def high(prompt: str, state: dict[str, str]) -> str | None:
+        return "high"
 
-    class EmptyPlugin:
-        @hookimpl
-        def system_prompt(self, prompt: str, state: dict[str, str]) -> str | None:
-            return None
+    def empty(prompt: str, state: dict[str, str]) -> str | None:
+        return None
 
-    framework.plugin_manager.register(LowPriorityPlugin(), name="low")
-    framework.plugin_manager.register(HighPriorityPlugin(), name="high")
-    framework.plugin_manager.register(EmptyPlugin(), name="empty")
+    framework.add_hooks(Hooks(system_prompt=[low]))
+    framework.add_hooks(Hooks(system_prompt=[high, empty]))
 
-    prompt = framework.get_system_prompt(prompt="hello", state={})
-
+    prompt = await framework.hooks.run_system_prompt("hello", {})
     assert prompt == "low\n\nhigh"
 
 
-def test_get_tape_sidecars_combines_plugins_and_prefers_the_highest_priority_name(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_add_hooks_keeps_sequence_order_across_calls(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
+    order: list[str] = []
+
+    def first(session_id: str, state: dict) -> dict:
+        order.append("first")
+        return {"from": "first"}
+
+    def second(session_id: str, state: dict) -> dict:
+        order.append("second")
+        return {"from": "second"}
+
+    framework.add_hooks(Hooks(load_state=[first]))
+    framework.add_hooks(Hooks(load_state=[second]))
+
+    state = await framework.build_state("s")
+
+    assert order == ["first", "second"]
+    assert state["from"] == "second"
+
+
+def test_add_sidecars_prefers_the_last_mount_for_a_duplicate_name(tmp_path: Path) -> None:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
     class Sidecar:
@@ -49,18 +62,8 @@ def test_get_tape_sidecars_combines_plugins_and_prefers_the_highest_priority_nam
             self.name = name
             self.source = source
 
-    class SidecarPlugin:
-        def __init__(self, sidecar: Sidecar) -> None:
-            self.sidecar = sidecar
-
-        @hookimpl
-        def provide_tape_sidecar(self) -> Sidecar:
-            return self.sidecar
-
-    framework.plugin_manager.register(SidecarPlugin(Sidecar("shared", "low")), name="low-shared")
-    framework.plugin_manager.register(SidecarPlugin(Sidecar("low-only", "low")), name="low-only")
-    framework.plugin_manager.register(SidecarPlugin(Sidecar("shared", "high")), name="high-shared")
-    framework.plugin_manager.register(SidecarPlugin(Sidecar("high-only", "high")), name="high-only")
+    framework.add_sidecars(Sidecar("shared", "low"), Sidecar("low-only", "low"))
+    framework.add_sidecars(Sidecar("shared", "high"), Sidecar("high-only", "high"))
 
     sidecars = {sidecar.name: sidecar for sidecar in framework.get_tape_sidecars()}
 
@@ -68,10 +71,13 @@ def test_get_tape_sidecars_combines_plugins_and_prefers_the_highest_priority_nam
     assert cast(Any, sidecars["shared"]).source == "high"
 
 
-@pytest.mark.asyncio
-async def test_continue_prompt_hook_is_gone(tmp_path: Path) -> None:
+def test_plugin_machinery_is_gone(tmp_path: Path) -> None:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
+    assert not hasattr(framework, "plugin_manager")
+    assert not hasattr(framework, "load_hooks")
+    assert not hasattr(framework, "load_builtin_hooks")
+    assert not hasattr(framework, "get_agent_hooks")
     assert not hasattr(framework, "continue_prompt")
 
 
@@ -86,16 +92,14 @@ async def test_running_enters_tape_store_once_and_reuses_it(tmp_path: Path) -> N
 
     tape_store = RecordingTapeStore()
 
-    class TapePlugin:
-        @hookimpl
-        def provide_tape_store(self):
-            tape_store.enter_count += 1
-            try:
-                yield tape_store
-            finally:
-                tape_store.exit_count += 1
+    def tape_store_lifespan():
+        tape_store.enter_count += 1
+        try:
+            yield tape_store
+        finally:
+            tape_store.exit_count += 1
 
-    framework.plugin_manager.register(TapePlugin(), name="tape")
+    framework.add_tape_store(tape_store_lifespan())
 
     async with framework.running():
         assert framework.get_tape_store() is tape_store
@@ -107,7 +111,34 @@ async def test_running_enters_tape_store_once_and_reuses_it(tmp_path: Path) -> N
     assert tape_store.exit_count == 1
 
 
-def test_load_hooks_loads_root_and_named_config_sections(write_config) -> None:
+@pytest.mark.asyncio
+async def test_running_enters_every_registered_lifespan(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
+    entered: list[str] = []
+
+    def first():
+        entered.append("first-in")
+        try:
+            yield
+        finally:
+            entered.append("first-out")
+
+    def second():
+        entered.append("second-in")
+        try:
+            yield
+        finally:
+            entered.append("second-out")
+
+    framework.add_lifespans(first, second)
+
+    async with framework.running():
+        assert entered == ["first-in", "second-in"]
+
+    assert entered == ["first-in", "second-in", "second-out", "first-out"]
+
+
+def test_config_sections_resolve_from_explicit_configuration(write_config) -> None:
     expected = "test-token"
     config_file = write_config(
         f"""
@@ -120,53 +151,23 @@ demo:
         workspace=config_file.parent, home=config_file.parent, config=Config.from_file(config_file)
     )
 
-    framework.load_hooks()
-
     assert framework.config.ensure(AgentSettings).model == "openai:gpt-5"
     assert framework.config.ensure(DemoSettings).token == expected
 
 
-def test_load_hooks_initializes_callable_plugins_after_config_load(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    framework = BubFramework(workspace=tmp_path, home=tmp_path, config=Config({"model": "openai:gpt-5"}))
-
-    class SettingsAwarePlugin:
-        def __init__(self, framework: BubFramework) -> None:
-            self.model = framework.config.ensure(AgentSettings).model
-
-        @hookimpl
-        def provide_tape_store(self) -> None:
-            return None
-
-    entry_point = SimpleNamespace(name="config-plugin", load=lambda: SettingsAwarePlugin)
-    monkeypatch.setattr(importlib.metadata, "entry_points", lambda group: [entry_point])
-
-    framework.load_hooks()
-
-    plugin = framework.plugin_manager.get_plugin("config-plugin")
-    assert isinstance(plugin, SettingsAwarePlugin)
-    assert plugin.model == "openai:gpt-5"
-
-
 @pytest.mark.asyncio
-async def test_build_state_merges_defaults_seeds_and_load_state_hooks(tmp_path: Path) -> None:
+async def test_build_state_merges_defaults_seeds_and_load_state_callbacks(tmp_path: Path) -> None:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
-    class LowPriority:
-        @hookimpl
-        def load_state(self, session_id: str, state: dict[str, str]) -> dict[str, str]:
-            assert state["_runtime_workspace"] == str(tmp_path)
-            assert state["seed"] == "kept"
-            return {"session_id": session_id, "from": "low"}
+    def low(session_id: str, state: dict[str, str]) -> dict[str, str]:
+        assert state["_runtime_workspace"] == str(tmp_path)
+        assert state["seed"] == "kept"
+        return {"session_id": session_id, "from": "low"}
 
-    class HighPriority:
-        @hookimpl
-        def load_state(self, session_id: str, state: dict[str, str]) -> dict[str, str]:
-            return {"from": "high"}
+    def high(session_id: str, state: dict[str, str]) -> dict[str, str]:
+        return {"from": "high"}
 
-    framework.plugin_manager.register(LowPriority(), name="low")
-    framework.plugin_manager.register(HighPriority(), name="high")
+    framework.add_hooks(Hooks(load_state=[low, high]))
 
     state = await framework.build_state("session-1", {"seed": "kept"})
 

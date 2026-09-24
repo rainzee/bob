@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from bub.builtin import Agent
+from bub.builtin.hooks import BuiltinHooks
 from bub.builtin.tools import run_subagent
 from bub.configure import Config
 from bub.framework import BubFramework
@@ -24,7 +25,7 @@ def _reply() -> AsyncStreamEvents:
 @pytest.fixture
 def framework(tmp_path: Path) -> BubFramework:
     framework = BubFramework(workspace=tmp_path, home=tmp_path, config=Config({"model": "test:model"}))
-    framework.load_builtin_hooks()
+    framework.add_hooks(BuiltinHooks(framework).hooks)
     return framework
 
 
@@ -34,7 +35,7 @@ def framework(tmp_path: Path) -> BubFramework:
 async def test_sdk_recovers_only_its_store_and_honors_explicit_overrides(
     framework: BubFramework, has_saved_state: bool, override: bool
 ) -> None:
-    builtin = framework.plugin_manager.get_plugin("builtin")
+    builtin = BuiltinHooks(framework)
     builtin_tape = builtin._get_agent().tape.session_tape("shared", framework.workspace)
     await builtin_tape.append_event("model_switch", {"model": "test:other"})
     await builtin_tape.append_event("reasoning_effort_switch", {"reasoning_effort": "low"})

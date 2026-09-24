@@ -9,18 +9,18 @@ from importlib.metadata import version as metadata_version
 from bub.builtin.agent import Agent
 from bub.configure import Config, Settings, config
 from bub.framework import BubFramework
-from bub.hooks import hookimpl
+from bub.hooks import Hooks
 from bub.tools import Tool, ToolContext, tool
 
 __all__ = [
     "Agent",
     "BubFramework",
     "Config",
+    "Hooks",
     "Settings",
     "Tool",
     "ToolContext",
     "config",
-    "hookimpl",
     "tool",
 ]
 

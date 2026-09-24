@@ -14,13 +14,16 @@ from typing import Any
 
 from loguru import logger
 
+from bub.builtin.context import default_tape_context
 from bub.builtin.model_runner import ModelRunner
 from bub.builtin.settings import AgentSettings
 from bub.framework import BubFramework
+from bub.hooks import Hooks
+from bub.sidecars import TapeSidecar
 from bub.skills import discover_skills, render_skills_prompt
 from bub.store import AsyncTapeStore, AsyncTapeStoreAdapter, InMemoryTapeStore, TapeStore, is_async_tape_store
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
-from bub.tape import Tape
+from bub.tape import Tape, TapeContext
 from bub.tools import Tool, model_tools
 from bub.tracing import Span, current_span
 from bub.turn import TurnState
@@ -39,6 +42,9 @@ class Agent:
         tools: Collection[Tool] = (),
         tape_store: TapeStore | AsyncTapeStore | None = None,
         skill_dirs: Collection[Path] = (),
+        tape_context: TapeContext | None = None,
+        sidecars: Collection[TapeSidecar] = (),
+        hooks: Hooks | None = None,
     ) -> None:
         """Create a builtin agent with instance-specific tools, skills, and storage.
 
@@ -51,7 +57,10 @@ class Agent:
                 store. Without either, the agent uses an in-memory store.
             skill_dirs: Skill roots in precedence order; an empty collection means
                 the agent sees no skills.
-
+            tape_context: Template for this agent's sessions; defaults to the
+                builtin chat-replay selection.
+            sidecars: Extra sidecars mounted after the framework's own.
+            hooks: Extra callbacks for this agent, appended after the framework's.
         Model settings come from the framework's configuration. The caller owns
         the lifecycle of an explicitly supplied store.
         """
@@ -60,15 +69,17 @@ class Agent:
         self.tools = {tool.name: tool for tool in tools}
         self.tape_store = tape_store
         self.skill_dirs = tuple(skill_dirs or ())
-        self.model_runner = ModelRunner(self.settings, hooks=framework.get_agent_hooks())
+        self.tape_context = tape_context if tape_context is not None else default_tape_context()
+        self.sidecars = tuple(sidecars or ())
+        self.hooks = framework.hooks + (hooks or Hooks())
+        self.model_runner = ModelRunner(self.settings, hooks=self.hooks)
 
     @cached_property
     def tape(self) -> Tape:
         """Return the lazily constructed, cached tape factory for this agent.
 
         Select the explicit store, active framework store, or an in-memory fallback,
-        in that order. Adapt synchronous stores and use hook-provided context and
-        sidecars.
+        in that order, and mount the framework's sidecars before this agent's own.
         """
         tape_store: TapeStore | AsyncTapeStore | None
         if self.tape_store is not None:
@@ -81,8 +92,8 @@ class Agent:
             tape_store = AsyncTapeStoreAdapter(tape_store)
         return Tape(
             tape_store,
-            self.framework.build_tape_context(),
-            sidecars=self.framework.get_tape_sidecars(),
+            self.tape_context,
+            sidecars=(*self.framework.get_tape_sidecars(), *self.sidecars),
         )
 
     @staticmethod
@@ -383,7 +394,7 @@ class Agent:
         allowed_skills: set[str] | None,
         tools: list[Tool],
     ) -> AsyncStreamEvents:
-        system_prompt = self._system_prompt(
+        system_prompt = await self._system_prompt(
             prompt_text, state=tape.context.state, allowed_skills=allowed_skills, tools=tools
         )
         resolved_model = model or self.settings.model
@@ -403,7 +414,7 @@ class Agent:
             prompt=prompt,
         )
 
-    def _system_prompt(
+    async def _system_prompt(
         self,
         prompt: str,
         state: TurnState,
@@ -413,7 +424,7 @@ class Agent:
         from bub.tools import render_tools_prompt
 
         blocks: list[str] = []
-        if result := self.framework.get_system_prompt(prompt=prompt, state=state):
+        if result := await self.hooks.run_system_prompt(prompt, state):
             blocks.append(result)
         tools_prompt = render_tools_prompt(tools if tools is not None else self.tools.values())
         if tools_prompt:

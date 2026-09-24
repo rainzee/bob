@@ -11,8 +11,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import install_builtin
 
-from bub.builtin.hook_impl import BatteryImpl
+from bub.builtin.hooks import Battery
 from bub.builtin.shell_manager import ManagedShell, ShellManager
 from bub.framework import BubFramework
 
@@ -33,16 +34,15 @@ async def _sleeping_shell(manager: ShellManager, *, ignore_term: bool = False) -
     return shell
 
 
-def _framework(tmp_path: Path) -> BubFramework:
+def _framework(tmp_path: Path) -> tuple[BubFramework, Battery]:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
-    framework.load_builtin_hooks(batteries=True)
-    return framework
+    battery = install_builtin(framework, batteries=True)
+    assert battery is not None
+    return framework, battery
 
 
-def _battery_manager(framework: BubFramework) -> ShellManager:
-    batteries = framework.plugin_manager.get_plugin("batteries")
-    assert isinstance(batteries, BatteryImpl)
-    return batteries.shell_manager
+def _battery_manager(battery: Battery) -> ShellManager:
+    return battery.shell_manager
 
 
 @pytest.mark.asyncio
@@ -50,8 +50,8 @@ def _battery_manager(framework: BubFramework) -> ShellManager:
 async def test_framework_lifespan_terminates_background_shells(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_kind: str
 ) -> None:
-    framework = _framework(tmp_path)
-    manager = _battery_manager(framework)
+    framework, battery = _framework(tmp_path)
+    manager = _battery_manager(battery)
     ready = asyncio.Event()
     finish = asyncio.Event()
     shells: list[ManagedShell] = []
@@ -90,10 +90,10 @@ async def test_framework_lifespan_terminates_background_shells(
 
 
 def test_two_frameworks_own_independent_shell_managers(tmp_path: Path) -> None:
-    first = _framework(tmp_path)
-    second = _framework(tmp_path)
+    _first, first_battery = _framework(tmp_path)
+    _second, second_battery = _framework(tmp_path)
 
-    assert _battery_manager(first) is not _battery_manager(second)
+    assert _battery_manager(first_battery) is not _battery_manager(second_battery)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
@@ -270,23 +270,17 @@ async def test_task_cannot_start_shell_after_its_runtime_has_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_startup_failure_cleans_shells_from_entered_lifespan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from bub.hooks import hookimpl
-
-    framework = _framework(tmp_path)
-    manager = _battery_manager(framework)
+async def test_startup_failure_cleans_shells_from_entered_lifespan(tmp_path: Path) -> None:
+    framework, battery = _framework(tmp_path)
+    manager = _battery_manager(battery)
     shells: list[ManagedShell] = []
 
-    class FailingStore:
-        @hookimpl
-        async def provide_tape_store(self):
-            shells.append(await _sleeping_shell(manager))
-            raise RuntimeError("store setup failed")
-            yield  # pragma: no cover
+    async def failing_store():
+        shells.append(await _sleeping_shell(manager))
+        raise RuntimeError("store setup failed")
+        yield  # pragma: no cover
 
-    framework.plugin_manager.register(FailingStore(), name="failing-store")
+    framework.add_tape_store(failing_store())
     with pytest.raises(RuntimeError, match="store setup failed"):
         async with framework.running():
             pytest.fail("startup must fail")

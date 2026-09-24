@@ -16,11 +16,11 @@ from any_llm.types.completion import ChatCompletion, ChatCompletionChunk
 from bub import tracing
 from bub.builtin.agent import Agent
 from bub.builtin.context import default_tape_context
+from bub.builtin.hooks import BuiltinHooks
 from bub.builtin.model_runner import ModelRunner
 from bub.builtin.settings import AgentSettings, ModelCandidate
 from bub.framework import BubFramework
-from bub.hooks import hookimpl
-from bub.hooks.interception import LlmCallDecision, ToolCallDecision, ToolCallResult
+from bub.hooks import Hooks, LlmCallDecision, ToolCallDecision
 from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent
 from bub.tape import Tape
@@ -45,10 +45,10 @@ def spans(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 @pytest.fixture
 def agent(tmp_path: Path) -> Agent:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
-    framework.load_builtin_hooks()
+    framework.add_hooks(BuiltinHooks(framework).hooks)
     agent = Agent(framework)
     agent.settings = AgentSettings.model_construct(model="openai:test", api_key="unused", api_base=None)
-    agent.model_runner = ModelRunner(agent.settings, hooks=framework.get_agent_hooks())
+    agent.model_runner = ModelRunner(agent.settings, hooks=framework.hooks)
     agent.__dict__["tape"] = Tape(AsyncTapeStoreAdapter(InMemoryTapeStore()), default_tape_context())
     return agent
 
@@ -277,12 +277,12 @@ async def test_cleanup_failure_finishes_span_without_leaking_context(spans: Any,
 
 @pytest.mark.asyncio
 async def test_llm_short_circuit_has_no_phantom_model_span(spans: Any, agent: Agent) -> None:
-    class Finish:
-        @hookimpl
-        def before_llm_call(self) -> LlmCallDecision:
-            return LlmCallDecision.finish("stopped by policy")
+    def finish(request, state) -> LlmCallDecision:
+        return LlmCallDecision.finish("stopped by policy")
 
-    agent.framework.plugin_manager.register(Finish())
+    agent.framework.add_hooks(Hooks(before_llm_call=[finish]))
+    agent.hooks = agent.framework.hooks + agent.hooks
+    agent.model_runner.hooks = agent.hooks
     events = await agent.run_stream(session_id="policy", prompt="hello", state={}, allowed_tools=[])
     assert [e.data["delta"] async for e in events if e.kind == "text"] == ["stopped by policy"]
     assert [s.name for s in spans.get_finished_spans()] == ["invoke_agent bub"]
@@ -290,17 +290,14 @@ async def test_llm_short_circuit_has_no_phantom_model_span(spans: Any, agent: Ag
 
 @pytest.mark.asyncio
 async def test_failed_tool_records_effective_result_and_original_failure(spans: Any, agent: Agent) -> None:
-    class Policy:
-        @hookimpl(tryfirst=True)
-        def before_tool_call(self) -> ToolCallDecision:
-            return ToolCallDecision.deny("denied")
+    def deny(call, state) -> ToolCallDecision:
+        return ToolCallDecision.deny("denied")
 
-        @hookimpl
-        def after_tool_call(self, result: ToolCallResult) -> None:
-            result.result = "bounded failure"
+    def bound(call, result, state) -> None:
+        result.result = "bounded failure"
 
-    agent.framework.plugin_manager.register(Policy())
-    execution = await ToolExecutor(agent.framework.get_agent_hooks()).execute_async(
+    hooks = Hooks(before_tool_call=[deny], after_tool_call=[bound])
+    execution = await ToolExecutor(hooks).execute_async(
         [(Tool(name="denied", handler=lambda: pytest.fail("must not run")), {})],
         context=ToolContext(agent.tape, "run-1"),
         call_ids=["denied-1"],
