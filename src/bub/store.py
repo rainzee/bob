@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, time
 from datetime import date as date_type
 from pathlib import Path
-from typing import Any, NoReturn, Protocol, Self, overload
+from typing import Any, Protocol, Self, overload
 
 from loguru import logger
 from typing_extensions import TypeIs
@@ -61,7 +61,6 @@ class TapeQuery[T: TapeStore | AsyncTapeStore]:
     _query: str | None = None
     _after_anchor: str | None = None
     _after_last: bool = False
-    _between_anchors: tuple[str, str] | None = None
     _between_dates: tuple[str, str] | None = None
     _kinds: tuple[str, ...] = field(default_factory=tuple)
     _limit: int | None = None
@@ -76,9 +75,6 @@ class TapeQuery[T: TapeStore | AsyncTapeStore]:
 
     def last_anchor(self) -> Self:
         return replace(self, _after_anchor=None, _after_last=True)
-
-    def between_anchors(self, start: str, end: str) -> Self:
-        return replace(self, _between_anchors=(start, end))
 
     def between_dates(self, start: str | date_type, end: str | date_type) -> Self:
         start_value = start.isoformat() if isinstance(start, date_type) else start
@@ -169,22 +165,11 @@ class InMemoryQueryMixin:
     def read(self, tape: str) -> list[TapeEntry] | None:
         raise NotImplementedError("InMemoryQueryMixin requires a read() method to be implemented.")
 
-    def fetch_all(self, query: TapeQuery) -> Iterable[TapeEntry]:  # noqa: C901
+    def fetch_all(self, query: TapeQuery) -> Iterable[TapeEntry]:
         entries = self.read(query.tape) or []
         start_index = 0
-        end_index: int | None = None
 
-        if query._between_anchors is not None:
-            start_name, end_name = query._between_anchors
-            start_idx = _anchor_index(entries, start_name, default=-1, forward=False)
-            if start_idx < 0:
-                raise BubError(ErrorKind.NOT_FOUND, f"Anchor '{start_name}' was not found.")
-            end_idx = _anchor_index(entries, end_name, default=-1, forward=True, start=start_idx + 1)
-            if end_idx < 0:
-                raise BubError(ErrorKind.NOT_FOUND, f"Anchor '{end_name}' was not found.")
-            start_index = min(start_idx + 1, len(entries))
-            end_index = min(max(start_index, end_idx), len(entries))
-        elif query._after_last:
+        if query._after_last:
             anchor_index = _anchor_index(entries, None, default=-1, forward=False)
             if anchor_index < 0:
                 raise BubError(ErrorKind.NOT_FOUND, "No anchors found in tape.")
@@ -195,7 +180,7 @@ class InMemoryQueryMixin:
                 raise BubError(ErrorKind.NOT_FOUND, f"Anchor '{query._after_anchor}' was not found.")
             start_index = min(anchor_index + 1, len(entries))
 
-        sliced = entries[start_index:end_index]
+        sliced = entries[start_index:]
         if query._between_dates is not None:
             start_date, end_date = query._between_dates
             start_dt = _parse_datetime_boundary(start_date, is_end=False)
@@ -256,28 +241,6 @@ class AsyncTapeStoreAdapter:
 
     async def append(self, tape: str, entry: TapeEntry) -> None:
         await asyncio.to_thread(self._store.append, tape, entry)
-
-
-class UnavailableTapeStore:
-    """Sync TapeStore sentinel that always fails with a clear message."""
-
-    def __init__(self, message: str) -> None:
-        self._message = message
-
-    def _raise(self) -> NoReturn:
-        raise BubError(ErrorKind.INVALID_INPUT, self._message)
-
-    def list_tapes(self) -> list[str]:
-        self._raise()
-
-    def reset(self, tape: str) -> None:
-        self._raise()
-
-    def fetch_all(self, query: TapeQuery) -> Iterable[TapeEntry]:
-        self._raise()
-
-    def append(self, tape: str, entry: TapeEntry) -> None:
-        self._raise()
 
 
 class ForkTapeStore:

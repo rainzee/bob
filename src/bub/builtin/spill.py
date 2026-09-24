@@ -13,7 +13,8 @@ from pydantic_settings import SettingsConfigDict
 from bub import config
 from bub.configure import Settings
 from bub.errors import BubError, ErrorKind
-from bub.tape import Tape, TapeEntry, TapeQuery
+from bub.store import TapeQuery
+from bub.tape import Tape, TapeEntry
 from bub.tools import ToolContext, tool
 
 SPILL_READ_TOOL_NAME = "spill.read"

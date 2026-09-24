@@ -36,8 +36,8 @@ demo:
 def test_ensure_caches_within_one_config_and_not_across_instances() -> None:
     config = Config()
 
-    assert config.ensure(AgentSettings) is config.ensure(AgentSettings)
-    assert Config().ensure(AgentSettings) is not config.ensure(AgentSettings)
+    assert config.ensure(DemoSettings) is config.ensure(DemoSettings)
+    assert Config().ensure(DemoSettings) is not config.ensure(DemoSettings)
 
 
 def test_get_value_reads_registered_section_from_yaml(load_config) -> None:
@@ -71,6 +71,7 @@ def test_get_value_descends_into_registered_dict_field(load_config) -> None:
     with patch.dict(os.environ, {}, clear=True):
         config = load_config(
             """
+model: test:model
 api_key:
   openai: sk-yaml
 """.strip(),
@@ -83,6 +84,7 @@ api_key:
 def test_get_value_ignores_raw_unregistered_path(load_config) -> None:
     config = load_config(
         """
+model: test:model
 custom:
   nested:
     value: raw-value
@@ -93,5 +95,7 @@ custom:
         config.get_value("custom.nested.value")
 
 
-def test_get_value_returns_default_for_missing_path() -> None:
-    assert Config().get_value("missing.value", default="fallback") == "fallback"
+def test_get_value_returns_default_for_missing_path(load_config) -> None:
+    config = load_config("model: test:model")
+
+    assert config.get_value("missing.value", default="fallback") == "fallback"

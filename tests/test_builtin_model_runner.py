@@ -25,8 +25,8 @@ from bub.builtin.model_runner import (
 )
 from bub.builtin.settings import AgentSettings, ModelCandidate
 from bub.errors import BubError, ErrorKind
-from bub.store import FileTapeStore
-from bub.tape import AsyncTapeStoreAdapter, InMemoryTapeStore, Tape, TapeContext
+from bub.store import AsyncTapeStoreAdapter, FileTapeStore, InMemoryTapeStore
+from bub.tape import Tape, TapeContext
 from bub.tools import Tool, ToolExecutor
 
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import re
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -9,12 +7,10 @@ from typing import Any
 from any_llm import AnyLLM
 from any_llm.constants import LLMProvider
 from pydantic import Field, field_validator
-from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from bub.configure import Settings, config
 
-DEFAULT_MODEL = "openrouter:openrouter/free"
 DEFAULT_MAX_TOKENS = 16384
 
 
@@ -25,34 +21,12 @@ class ModelCandidate:
     name: str
 
 
-class ProviderSpecificEnvSource(PydanticBaseSettingsSource):
-    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
-        return None, field_name, False
-
-    def __call__(self) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for field_name, setting_name in (("api_key", "api_key"), ("api_base", "api_base")):
-            values = self._provider_specific(setting_name)
-            if values:
-                result[field_name] = values
-        return result
-
-    @staticmethod
-    def _provider_specific(setting_name: str) -> dict[str, str]:
-        setting_regex = re.compile(rf"^BUB_(.+)_{setting_name.upper()}$")
-        result: dict[str, str] = {}
-        for key, value in os.environ.items():
-            if match := setting_regex.match(key):
-                result[match.group(1).lower()] = value
-        return result
-
-
 @config()
 class AgentSettings(Settings):
     """Configuration settings for the Agent."""
 
     model_config = SettingsConfigDict(env_prefix="BUB_", env_parse_none_str="null", extra="ignore")
-    model: str = DEFAULT_MODEL
+    model: str
     fallback_models: list[str] | None = None
     api_key: str | dict[str, str] | None = None
     api_base: str | dict[str, str] | None = None
@@ -76,7 +50,6 @@ class AgentSettings(Settings):
             env_settings,
             dotenv_settings,
             init_settings,
-            ProviderSpecificEnvSource(settings_cls),
             file_secret_settings,
         )
 

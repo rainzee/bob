@@ -23,6 +23,7 @@ def _reply() -> AsyncStreamEvents:
 @pytest.fixture
 def framework(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> BubFramework:
     monkeypatch.setenv("BUB_HOME", str(tmp_path))
+    monkeypatch.setenv("BUB_MODEL", "test:model")
     framework = BubFramework(config_file=tmp_path / "config.yml")
     framework.workspace = tmp_path
     framework.load_builtin_hooks()

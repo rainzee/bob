@@ -113,15 +113,16 @@ See the [Build docs](https://bub.build/docs/build/) for hook guides, packaging, 
 
 | Variable                    | Default                      | Description                                          |
 | --------------------------- | ---------------------------- | ---------------------------------------------------- |
-| `BUB_MODEL`                 | `openrouter:openrouter/free` | Model identifier                                     |
-| `BUB_API_KEY`               | —                            | Provider key                                         |
-| `BUB_API_BASE`              | —                            | Custom provider endpoint                             |
+| `BUB_MODEL`                 | required                     | Model identifier, `provider:model_id`                |
+| `BUB_API_KEY`               | —                            | Provider key, or a JSON object keyed by provider     |
+| `BUB_API_BASE`              | —                            | Custom provider endpoint, or a JSON object keyed by provider |
 | `BUB_CLIENT_ARGS`           | —                            | JSON object forwarded to the underlying model client |
 | `BUB_COMPLETION_ARGS`       | —                            | JSON object forwarded to each completion call         |
 | `BUB_MAX_STEPS`             | unlimited                    | Tool-use loop limit; must be a positive integer      |
 | `BUB_MAX_TOKENS`            | `16384`                      | Max tokens per model call                            |
 | `BUB_MODEL_TIMEOUT_SECONDS` | —                            | Model call timeout (seconds)                         |
 | `BUB_SPILL_THRESHOLD`       | `4096`                       | Estimated tokens before tool output spills; `0` disables |
+| `BUB_HOME`                  | `~/.bub`                     | Home used for tapes and the default config file; ignored when passed to the constructor |
 
 ## Background
 

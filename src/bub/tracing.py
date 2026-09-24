@@ -19,17 +19,6 @@ else:
     except ImportError:
         otel = None
 
-_OPENINFERENCE_ATTRIBUTES = {
-    "gen_ai.provider.name": "llm.provider",
-    "gen_ai.request.model": "llm.model_name",
-    "gen_ai.response.model": "llm.model_name",
-    "gen_ai.usage.input_tokens": "llm.token_count.prompt",
-    "gen_ai.usage.output_tokens": "llm.token_count.completion",
-    "gen_ai.tool.name": "tool.name",
-    "gen_ai.tool.call.arguments": "input.value",
-    "gen_ai.tool.call.result": "output.value",
-}
-
 
 def configure_otlp() -> None:
     """Configure opt-in HTTP export; preserve application-owned providers."""
@@ -111,13 +100,6 @@ class Span:
             self._span = None
         self._ended = False
         self.set(**(attributes or {}))
-        self.set(**{
-            "openinference.span.kind": {
-                "invoke_agent": "AGENT",
-                "chat": "LLM",
-                "execute_tool": "TOOL",
-            }.get(self._operation)
-        })
 
     @property
     def recording(self) -> bool:
@@ -126,15 +108,6 @@ class Span:
     def set(self, **attributes: Any) -> None:
         if not self.recording:
             return
-        for key, alias in _OPENINFERENCE_ATTRIBUTES.items():
-            if (value := attributes.get(key)) is not None:
-                if alias in {"input.value", "output.value"}:
-                    attributes[alias] = value if isinstance(value, str) else _json(value)
-                    attributes[alias.replace("value", "mime_type")] = (
-                        "text/plain" if isinstance(value, str) else "application/json"
-                    )
-                else:
-                    attributes[alias] = value
         for key, value in attributes.items():
             if value is not None:
                 self._span.set_attribute(
@@ -156,14 +129,10 @@ class Span:
     def messages(self, key: str, messages: list[dict[str, Any]]) -> None:
         if self.recording:
             normalized = [{"role": m.get("role", "user"), "parts": _parts(m)} for m in messages]
-            direction = "input" if key == "gen_ai.input.messages" else "output"
+            self.set(**{key: _json(normalized)})
             self.set(**{
                 key: _json(normalized),
-                f"{direction}.value": _json(normalized),
-                f"{direction}.mime_type": "application/json",
             })
-            if self._operation == "chat":
-                self.set(**_openinference_messages(direction, normalized))
 
     def event(self, name: str, attributes: Mapping[str, Any]) -> None:
         if self.recording:
@@ -216,30 +185,6 @@ class Span:
 
 
 _CURRENT: ContextVar[Span | None] = ContextVar("bub_trace_span", default=None)
-
-
-def _openinference_messages(direction: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    attributes: dict[str, Any] = {}
-    for index, message in enumerate(messages):
-        prefix = f"llm.{direction}_messages.{index}.message"
-        attributes[f"{prefix}.role"] = message["role"]
-        text: list[str] = []
-        call_index = 0
-        for part in message["parts"]:
-            if part["type"] == "text":
-                text.append(part["content"])
-            elif part["type"] == "tool_call_response":
-                attributes[f"{prefix}.tool_call_id"] = part["id"]
-                text.append(part["response"] if isinstance(part["response"], str) else _json(part["response"]))
-            elif part["type"] == "tool_call":
-                call_prefix = f"{prefix}.tool_calls.{call_index}.tool_call"
-                attributes[f"{call_prefix}.id"] = part["id"]
-                attributes[f"{call_prefix}.function.name"] = part["name"]
-                attributes[f"{call_prefix}.function.arguments"] = _json(part["arguments"])
-                call_index += 1
-        if text:
-            attributes[f"{prefix}.content"] = "\n".join(text)
-    return attributes
 
 
 def current_span() -> Span | None:

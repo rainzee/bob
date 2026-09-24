@@ -14,10 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-from bub.builtin.model_runner import (
-    ModelRunner,
-    is_context_length_error,
-)
+from bub.builtin.model_runner import ModelRunner
 from bub.builtin.settings import AgentSettings
 from bub.framework import BubFramework
 from bub.skills import discover_skills, render_skills_prompt
@@ -30,7 +27,6 @@ from bub.turn import TurnState
 from bub.utils import workspace_from_state
 
 HINT_RE = re.compile(r"\$([A-Za-z0-9_.-]+)")
-MAX_AUTO_HANDOFF_RETRIES = 1
 
 
 class Agent:
@@ -236,7 +232,7 @@ class Agent:
             },
         )
         state = StreamState()
-        iterator = self._stream_events_with_auto_handoff(
+        iterator = self._stream_events(
             tape=tape,
             prompt=next_prompt,
             state=state,
@@ -246,7 +242,7 @@ class Agent:
         )
         return AsyncStreamEvents(iterator, state=state)
 
-    async def _stream_events_with_auto_handoff(
+    async def _stream_events(
         self,
         tape: Tape,
         prompt: str | list[dict],
@@ -255,7 +251,6 @@ class Agent:
         allowed_skills: Collection[str] | None = None,
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
-        auto_handoff_remaining = MAX_AUTO_HANDOFF_RETRIES
         display_model = model or self.settings.model
         next_prompt = prompt
         for step in range(1, self.settings.max_steps + 1):
@@ -291,30 +286,6 @@ class Agent:
             except Exception as exc:
                 error_message = f"{exc!s}"
                 elapsed_ms = int((time.monotonic() - start) * 1000)
-                if auto_handoff_remaining > 0 and is_context_length_error(error_message):
-                    auto_handoff_remaining -= 1
-                    logger.warning(
-                        "auto_handoff: context length exceeded, performing automatic handoff. tape={} step={}",
-                        tape.name,
-                        step,
-                    )
-                    await tape.handoff(
-                        name="auto_handoff/context_overflow",
-                        state={"reason": "context_length_exceeded", "error": error_message},
-                    )
-                    await tape.append_event(
-                        "loop.step",
-                        {
-                            "step": step,
-                            "elapsed_ms": elapsed_ms,
-                            "status": "auto_handoff",
-                            "error": error_message,
-                            "date": datetime.now(UTC).isoformat(),
-                        },
-                    )
-                    next_prompt = prompt
-                    continue
-
                 await tape.append_event(
                     "loop.step",
                     {

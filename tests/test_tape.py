@@ -9,23 +9,10 @@ from bub.store import AsyncTapeStoreAdapter, ForkTapeStore, InMemoryTapeStore
 from bub.tape import Tape, TapeContext, TapeEntry
 
 
-def test_tape_reexports_legacy_store_objects() -> None:
-    from bub import store, tape
+def test_tape_module_exports_only_tape_primitives() -> None:
+    from bub import tape
 
-    expected_exports = {
-        "AsyncTapeStore",
-        "AsyncTapeStoreAdapter",
-        "InMemoryQueryMixin",
-        "InMemoryTapeStore",
-        "TapeQuery",
-        "TapeStore",
-        "UnavailableTapeStore",
-        "is_async_tape_store",
-    }
-
-    assert expected_exports <= set(dir(tape))
-    for name in expected_exports:
-        assert getattr(tape, name) is getattr(store, name)
+    assert set(tape.__all__) <= {name for name in dir(tape) if not name.startswith("_")}
 
 
 @pytest.mark.asyncio

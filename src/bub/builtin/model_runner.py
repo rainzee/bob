@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import re
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Iterator
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -43,10 +42,6 @@ from bub.tape import Tape
 from bub.tools import Tool, ToolContext, ToolExecutor
 from bub.tracing import Span, current_span, event
 
-CONTEXT_LENGTH_PATTERNS = re.compile(
-    r"context.{0,20}(?:length|window)|maximum.{0,20}context|token.{0,10}limit|prompt.{0,10}too long|tokens? > \d+ maximum",
-    re.IGNORECASE,
-)
 TOOL_ARGUMENTS_ADAPTER = TypeAdapter(dict[str, Any])
 CompletionResult = ChatCompletion | ParsedChatCompletion[Any] | AsyncIterator[ChatCompletionChunk]
 GOOGLE_FILE_CONTENT_PROVIDERS = frozenset({LLMProvider.GEMINI, LLMProvider.VERTEXAI})
@@ -608,8 +603,3 @@ def parse_native_function_call(tool_call: ChatCompletionMessageToolCall) -> tupl
     except ValidationError as exc:
         raise BubError(ErrorKind.INVALID_INPUT, "Expected a function tool call with JSON object arguments.") from exc
     return tool_call.function.name, arguments
-
-
-def is_context_length_error(error_msg: str) -> bool:
-    """Check whether an error message indicates a context-length / prompt-too-long failure."""
-    return bool(CONTEXT_LENGTH_PATTERNS.search(error_msg))

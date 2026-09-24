@@ -282,7 +282,7 @@ async def test_agent_loop_awaits_continue_prompt_hook_with_stream_state() -> Non
 
     events = [
         event
-        async for event in agent._stream_events_with_auto_handoff(
+        async for event in agent._stream_events(
             tape=tape,  # type: ignore[arg-type]
             prompt="initial prompt",
             state=StreamState(),

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import string
 import sys
-import warnings
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,9 +15,8 @@ import yaml
 from bub.configure import Config
 
 PROJECT_SKILLS_DIR = ".agents/skills"
-LEGACY_SKILLS_DIR = ".agent/skills"
 SKILL_FILE_NAME = "SKILL.md"
-SKILL_SOURCES = ("project", "global", "builtin")
+SKILL_SOURCES = ("project", "global")
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 CONFIG_TEMPLATE_PATTERN = re.compile(r"\$\{\s*config\.([a-zA-Z0-9_.-]+)\s*\}")
 
@@ -169,37 +167,13 @@ def _is_valid_metadata_field(metadata_field: object) -> bool:
     return all(isinstance(key, str) and isinstance(value, str) for key, value in metadata_field.items())
 
 
-def _builtin_skills_root() -> list[Path]:
-    """列出已安装的内置技能根目录, 未安装时返回空列表"""
-
-    import importlib
-
-    try:
-        module = importlib.import_module("skills")
-    except ModuleNotFoundError:
-        return []
-    return [Path(p) for p in module.__path__]
-
-
 def iter_skill_roots(workspace_path: Path) -> list[tuple[Path, str]]:
-    roots: list[tuple[Path, str]] = []
-    for source in SKILL_SOURCES:
-        if source == "project":
-            roots.append((workspace_path / PROJECT_SKILLS_DIR, source))
-            legacy_path = workspace_path / LEGACY_SKILLS_DIR
-            if legacy_path.is_dir():
-                warnings.warn(
-                    f"Found legacy skills directory at '{legacy_path}'. Please move it to '{PROJECT_SKILLS_DIR}' to avoid this warning in the future.",
-                    category=UserWarning,
-                    stacklevel=2,
-                )
-                roots.append((legacy_path, source))
-        elif source == "global":
-            roots.append((Path.home() / PROJECT_SKILLS_DIR, source))
-        elif source == "builtin":
-            for path in _builtin_skills_root():
-                roots.append((path, source))
-    return roots
+    """List the project and user skill roots, in precedence order"""
+
+    return [
+        (workspace_path / PROJECT_SKILLS_DIR, "project"),
+        (Path.home() / PROJECT_SKILLS_DIR, "global"),
+    ]
 
 
 def render_skills_prompt(

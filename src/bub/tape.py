@@ -18,64 +18,22 @@ from bub import tracing
 from bub.errors import BubError
 from bub.sidecars import TapeSidecar, sidecar_tape_name
 
+if TYPE_CHECKING:
+    from bub.store import AsyncTapeStore, TapeQuery
+
 __all__ = [
     "LAST_ANCHOR",
     "AnchorSelector",
     "AnchorSummary",
-    "AsyncTapeStore",
-    "AsyncTapeStoreAdapter",
     "ContextSelector",
-    "InMemoryQueryMixin",
-    "InMemoryTapeStore",
     "SelectedMessages",
     "Tape",
     "TapeContext",
     "TapeEntry",
     "TapeInfo",
-    "TapeQuery",
-    "TapeStore",
-    "UnavailableTapeStore",
     "build_messages",
-    "is_async_tape_store",
     "utc_now",
 ]
-
-if TYPE_CHECKING:
-    from bub.store import (
-        AsyncTapeStore,
-        AsyncTapeStoreAdapter,
-        InMemoryQueryMixin,
-        InMemoryTapeStore,
-        TapeQuery,
-        TapeStore,
-        UnavailableTapeStore,
-        is_async_tape_store,
-    )
-
-
-_STORE_EXPORTS = frozenset({
-    "AsyncTapeStore",
-    "AsyncTapeStoreAdapter",
-    "InMemoryQueryMixin",
-    "InMemoryTapeStore",
-    "TapeQuery",
-    "TapeStore",
-    "UnavailableTapeStore",
-    "is_async_tape_store",
-})
-
-
-def __getattr__(name: str) -> Any:
-    if name not in _STORE_EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-    from bub import store
-
-    return getattr(store, name)
-
-
-def __dir__() -> list[str]:
-    return sorted({*globals(), *_STORE_EXPORTS})
 
 
 def utc_now() -> str:
@@ -444,52 +402,6 @@ class Tape:
         except Exception as exc:
             return self._sidecar_lifecycle_data(sidecar=sidecar.name, status="error", reason=reason, error=exc)
         return self._sidecar_lifecycle_data(sidecar=sidecar.name, status="ok", reason=reason)
-
-    def _require_sidecar(self, name: str) -> TapeSidecar:
-        sidecar = self.get_sidecar(name)
-        if sidecar is None:
-            raise KeyError(f"tape sidecar {name!r} is not mounted")
-        return sidecar
-
-    async def archive_sidecar(self, name: str, *, reason: str = "manual") -> str:
-        """Archive one mounted sidecar without changing the main tape."""
-
-        sidecar = self._require_sidecar(name)
-        archive_path, event_data = await self._try_archive_sidecar(sidecar, reason=reason)
-        await self.append_event("sidecar.archive", event_data, context=False)
-        return (
-            f"Archived {name}: {archive_path}"
-            if archive_path is not None
-            else f"{name} archive failed: {event_data['error']}"
-        )
-
-    async def reset_sidecar(self, name: str, *, archive: bool = False, reason: str = "gc") -> str:
-        """Reset one mounted sidecar and record the outcome on the main tape."""
-
-        sidecar = self._require_sidecar(name)
-        archive_path: Path | None = None
-        archive_data: dict[str, Any] | None = None
-        if archive:
-            archive_path, archive_data = await self._try_archive_sidecar(sidecar, reason=reason)
-
-        if archive_data is not None and archive_data["status"] == "error":
-            reset_data = self._sidecar_lifecycle_data(
-                sidecar=name,
-                status="skipped",
-                reason=reason,
-                cause="archive_failed",
-            )
-        else:
-            reset_data = await self._try_reset_sidecar(sidecar, reason=reason)
-        if archive_data is not None:
-            await self.append_event("sidecar.archive", archive_data, context=False)
-        await self.append_event("sidecar.reset", reset_data, context=False)
-
-        if reset_data["status"] == "error":
-            return f"{name} reset failed: {reset_data['error']}"
-        if reset_data["status"] == "skipped" and archive_data is not None:
-            return f"{name} archive failed: {archive_data['error']}; {name} reset skipped"
-        return f"Archived {name}: {archive_path}" if archive_path is not None else "ok"
 
     async def reset(self, *, archive: bool = False) -> str:
         archive_path: Path | None = None

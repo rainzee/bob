@@ -5,15 +5,18 @@ from unittest.mock import patch
 
 import pytest
 from any_llm.constants import LLMProvider
+from pydantic import ValidationError
 
-from bub.builtin.settings import DEFAULT_MODEL, AgentSettings
+from bub.builtin.settings import AgentSettings
 from bub.builtin.spill import SpillSettings
 from bub.configure import Config
+
+TEST_MODEL = "test:model"
 
 
 def _settings_with_env(env: dict[str, str]) -> AgentSettings:
     with patch.dict("os.environ", env, clear=True):
-        return AgentSettings()
+        return AgentSettings(model=TEST_MODEL)
 
 
 def test_settings_single_api_key_and_base() -> None:
@@ -23,18 +26,9 @@ def test_settings_single_api_key_and_base() -> None:
     assert isinstance(settings.api_base, str)
 
 
-def test_settings_per_provider_keys() -> None:
-    settings = _settings_with_env({
-        "BUB_OPENAI_API_KEY": "sk-openai",
-        "BUB_OPENAI_API_BASE": "https://api.openai.com",
-        "BUB_ANTHROPIC_API_KEY": "sk-anthropic",
-    })
-
-    assert isinstance(settings.api_key, dict)
-    assert settings.api_key["openai"] == "sk-openai"
-    assert settings.api_key["anthropic"] == "sk-anthropic"
-    assert isinstance(settings.api_base, dict)
-    assert settings.api_base["openai"] == "https://api.openai.com"
+def test_settings_require_an_explicit_model() -> None:
+    with patch.dict(os.environ, {}, clear=True), pytest.raises(ValidationError, match="model"):
+        AgentSettings()
 
 
 def test_settings_no_keys_return_none() -> None:
@@ -49,33 +43,16 @@ def test_settings_no_keys_return_none() -> None:
 @pytest.mark.parametrize("provider", ["openai", LLMProvider.OPENAI, "acme"])
 def test_client_options_resolve_provider_names_and_enum_values(provider: str) -> None:
     settings = _settings_with_env({
-        f"BUB_{provider.upper()}_API_KEY": "environment-key",
-        f"BUB_{provider.upper()}_API_BASE": "https://example.test/v1",
+        "BUB_API_KEY": '{"openai": "openai-key", "acme": "acme-key"}',
+        "BUB_API_BASE": '{"openai": "https://api.openai.com"}',
         "BUB_CLIENT_ARGS": '{"api_key": "ignored-key", "api_base": "https://ignored.test", "timeout": 5}',
     })
+
     assert settings.model_client_kwargs(provider) == {
-        "api_key": "environment-key",
-        "api_base": "https://example.test/v1",
+        "api_key": "openai-key" if provider != "acme" else "acme-key",
+        "api_base": "https://api.openai.com" if provider != "acme" else None,
         "timeout": 5,
     }
-
-
-def test_settings_provider_names_are_lowercased() -> None:
-    settings = _settings_with_env({"BUB_OPENROUTER_API_KEY": "sk-or"})
-
-    assert isinstance(settings.api_key, dict)
-    assert "openrouter" in settings.api_key
-
-
-def test_settings_mixed_single_key_with_per_provider_base() -> None:
-    settings = _settings_with_env({
-        "BUB_API_KEY": "sk-global",
-        "BUB_OPENAI_API_BASE": "https://api.openai.com",
-    })
-
-    assert settings.api_key == "sk-global"
-    assert isinstance(settings.api_base, dict)
-    assert settings.api_base["openai"] == "https://api.openai.com"
 
 
 def test_settings_load_values_from_yaml(load_config) -> None:
@@ -166,12 +143,9 @@ def test_spill_sidecar_settings_load_from_the_plugin_section(load_config) -> Non
     assert config.ensure(SpillSettings).threshold == 64
 
 
-def test_load_settings_returns_defaults_without_loaded_config() -> None:
-    with patch.dict(os.environ, {}, clear=True):
-        settings = Config().ensure(AgentSettings)
-
-    assert settings.model == DEFAULT_MODEL
-    assert settings.max_steps == AgentSettings.model_fields["max_steps"].default
+def test_load_settings_requires_a_model_when_none_is_configured() -> None:
+    with patch.dict(os.environ, {}, clear=True), pytest.raises(ValidationError, match="model"):
+        Config().ensure(AgentSettings)
 
 
 def test_load_settings_returns_loaded_config(load_config) -> None:

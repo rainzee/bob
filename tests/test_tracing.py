@@ -115,13 +115,6 @@ async def test_agent_trajectory_has_parallel_tools_messages_and_tape_links(
     assert all(s.attributes["gen_ai.usage.input_tokens"] == 10 for s in models)
     assert "gen_ai.usage.input_tokens" not in root.attributes  # No double counting.
     assert root.attributes["gen_ai.conversation.id"] == "trace-test"
-    assert root.attributes["openinference.span.kind"] == "AGENT"
-    assert all(s.attributes["openinference.span.kind"] == "LLM" for s in models)
-    assert all(s.attributes["openinference.span.kind"] == "TOOL" for s in tools)
-    assert models[0].attributes["llm.token_count.prompt"] == 10
-    assert models[0].attributes["llm.model_name"] == "actual-model"
-    assert models[0].attributes["llm.output_messages.0.message.tool_calls.0.tool_call.id"] == "call-1"
-    assert json.loads(tools[0].attributes["output.value"]) == {"value": "result"}
     messages = json.loads(root.attributes["gen_ai.output.messages"])
     assert [m["role"] for m in messages] == ["assistant", "tool", "tool", "assistant"]
     assert messages[-1]["parts"] == [{"type": "text", "content": "done"}]
