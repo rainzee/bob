@@ -29,7 +29,7 @@ class BubFramework:
 
         Args:
             workspace: Directory turns and skill discovery resolve against.
-            home: Directory the runtime may write tapes and archives under.
+            home: Directory the runtime may write tapes under.
             config: Explicit configuration; defaults to empty configuration.
 
         Register plugins or load builtin hooks before executing turns;

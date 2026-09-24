@@ -228,9 +228,11 @@ async def tape_search(param: SearchInput, *, context: ToolContext) -> str:
 
 
 @tool(context=True, name="tape.reset")
-async def tape_reset(archive: bool = False, *, context: ToolContext) -> str:
-    """Reset the current tape, optionally archiving it."""
-    return cast(str, await context.tape.reset(archive=archive))
+async def tape_reset(*, context: ToolContext) -> str:
+    """Reset the current tape and every mounted sidecar."""
+
+    await context.tape.reset()
+    return "ok"
 
 
 @tool(context=True, name="tape.handoff")

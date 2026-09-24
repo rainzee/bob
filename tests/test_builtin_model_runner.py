@@ -132,7 +132,7 @@ async def test_tool_call_text_survives_into_next_request_after_tape_reload(
     runner = ModelRunner(AgentSettings.model_construct(model="test-model", model_timeout_seconds=None))
     monkeypatch.setattr(runner, "completion_response", complete)
     tools = [Tool(name="inspect", handler=lambda: "files found"), Tool(name="compare", handler=lambda: "bytes differ")]
-    root = Tape(tmp_path, AsyncTapeStoreAdapter(FileTapeStore(tmp_path)), default_tape_context()).scoped("test-tape")
+    root = Tape(AsyncTapeStoreAdapter(FileTapeStore(tmp_path)), default_tape_context()).scoped("test-tape")
     async with root.fork_tape() as tape:
         await tape.ensure_bootstrap_anchor()
         events = [
@@ -142,9 +142,7 @@ async def test_tool_call_text_survives_into_next_request_after_tape_reload(
             )
         ]
 
-    reloaded = Tape(tmp_path, AsyncTapeStoreAdapter(FileTapeStore(tmp_path)), default_tape_context()).scoped(
-        "test-tape"
-    )
+    reloaded = Tape(AsyncTapeStoreAdapter(FileTapeStore(tmp_path)), default_tape_context()).scoped("test-tape")
     async for _ in runner.run(tape=reloaded, model="test-model", tools=tools, system_prompt=None, prompt="Continue."):
         pass
 
@@ -261,7 +259,7 @@ async def test_streaming_openai_usage_is_requested_and_recorded_in_tape(
     clock = iter([10.0, 12.0])
     monkeypatch.setattr("bub.builtin.model_runner.monotonic", lambda: next(clock))
     store = InMemoryTapeStore()
-    tape = Tape(tmp_path, AsyncTapeStoreAdapter(store), TapeContext()).scoped("test-tape")
+    tape = Tape(AsyncTapeStoreAdapter(store), TapeContext()).scoped("test-tape")
     llm = _FakeStreamingOpenAIProvider()
     runner = _FakeOpenAIModelRunner(
         AgentSettings.model_construct(model="openai:gpt-test", max_tokens=100, model_timeout_seconds=None),
@@ -317,7 +315,6 @@ async def test_anthropic_prompt_caching_is_requested() -> None:
 @pytest.mark.asyncio
 async def test_run_applies_reasoning_effort_from_tape_state(tmp_path: Path) -> None:
     tape = Tape(
-        tmp_path,
         AsyncTapeStoreAdapter(InMemoryTapeStore()),
         TapeContext(state={"reasoning_effort": "high"}),
     ).scoped("test-tape")

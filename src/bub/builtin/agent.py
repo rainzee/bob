@@ -68,7 +68,7 @@ class Agent:
 
         Select the explicit store, active framework store, or an in-memory fallback,
         in that order. Adapt synchronous stores and use hook-provided context and
-        sidecars. Archive files live under the framework's home directory.
+        sidecars.
         """
         tape_store: TapeStore | AsyncTapeStore | None
         if self.tape_store is not None:
@@ -80,7 +80,6 @@ class Agent:
         if not is_async_tape_store(tape_store):
             tape_store = AsyncTapeStoreAdapter(tape_store)
         return Tape(
-            self.framework.home / "tapes",
             tape_store,
             self.framework.build_tape_context(),
             sidecars=self.framework.get_tape_sidecars(),

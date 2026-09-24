@@ -28,7 +28,7 @@ _TEST_SHELL_MANAGER = ShellManager()
 
 
 def _tool_context(tmp_path, **state) -> ToolContext:
-    tape = Tape(tmp_path, AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
+    tape = Tape(AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
     return ToolContext(
         tape=tape,
         run_id="test-run",

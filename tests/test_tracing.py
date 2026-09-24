@@ -49,7 +49,7 @@ def agent(tmp_path: Path) -> Agent:
     agent = Agent(framework)
     agent.settings = AgentSettings.model_construct(model="openai:test", api_key="unused", api_base=None)
     agent.model_runner = ModelRunner(agent.settings, hooks=framework.get_agent_hooks())
-    agent.__dict__["tape"] = Tape(tmp_path, AsyncTapeStoreAdapter(InMemoryTapeStore()), default_tape_context())
+    agent.__dict__["tape"] = Tape(AsyncTapeStoreAdapter(InMemoryTapeStore()), default_tape_context())
     return agent
 
 

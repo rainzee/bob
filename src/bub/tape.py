@@ -5,9 +5,8 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import inspect
-import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable, Mapping
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -160,7 +159,6 @@ class AnchorSummary:
 class Tape:
     """Tape abstraction for recording agent interactions."""
 
-    archive_path: Path
     store: AsyncTapeStore
     context: TapeContext
     sidecars: tuple[TapeSidecar, ...] = field(default=(), repr=False)
@@ -342,59 +340,18 @@ class Tape:
             return payload if isinstance(payload, dict) else None
         return None
 
-    async def _archive_tape(self, tape_name: str, stamp: str) -> Path:
-        from bub.store import TapeQuery
-
-        self.archive_path.mkdir(parents=True, exist_ok=True)
-        archive_path = self.archive_path / f"{tape_name}.jsonl.{stamp}.bak"
-        with archive_path.open("w", encoding="utf-8") as f:
-            query = TapeQuery(tape=tape_name, store=self.store)
-            for entry in await self.store.fetch_all(query):
-                f.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
-        return archive_path
-
     @staticmethod
     def _sidecar_lifecycle_data(
         *,
         sidecar: str,
         status: str,
         reason: str,
-        archive_path: Path | None = None,
         error: Exception | None = None,
-        cause: str | None = None,
     ) -> dict[str, Any]:
         data: dict[str, Any] = {"sidecar": sidecar, "status": status, "reason": reason}
-        if archive_path is not None:
-            data["archive"] = str(archive_path)
         if error is not None:
             data["error"] = str(error)
-        if cause is not None:
-            data["cause"] = cause
         return data
-
-    async def _try_archive_sidecar(
-        self,
-        sidecar: TapeSidecar,
-        *,
-        reason: str,
-        stamp: str | None = None,
-    ) -> tuple[Path | None, dict[str, Any]]:
-        archive_stamp = stamp or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        try:
-            archive_path = await self._archive_tape(sidecar_tape_name(self.name, sidecar.name), archive_stamp)
-        except Exception as exc:
-            return None, self._sidecar_lifecycle_data(
-                sidecar=sidecar.name,
-                status="error",
-                reason=reason,
-                error=exc,
-            )
-        return archive_path, self._sidecar_lifecycle_data(
-            sidecar=sidecar.name,
-            status="ok",
-            reason=reason,
-            archive_path=archive_path,
-        )
 
     async def _try_reset_sidecar(self, sidecar: TapeSidecar, *, reason: str) -> dict[str, Any]:
         try:
@@ -403,35 +360,14 @@ class Tape:
             return self._sidecar_lifecycle_data(sidecar=sidecar.name, status="error", reason=reason, error=exc)
         return self._sidecar_lifecycle_data(sidecar=sidecar.name, status="ok", reason=reason)
 
-    async def reset(self, *, archive: bool = False) -> str:
-        archive_path: Path | None = None
-        sidecar_archives: dict[str, dict[str, Any]] = {}
-        if archive:
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            archive_path = await self._archive_tape(self.name, stamp)
-            for sidecar in self.sidecars:
-                _, sidecar_archive = await self._try_archive_sidecar(sidecar, reason="tape.reset", stamp=stamp)
-                sidecar_archives[sidecar.name] = sidecar_archive
+    async def reset(self) -> None:
+        """Clear this tape and every mounted sidecar, then start a fresh session."""
+
         await self.store.reset(self.name)
-        state = {"owner": "human"}
-        if archive_path is not None:
-            state["archived"] = str(archive_path)
-        await self.handoff(name="session/start", state=state)
+        await self.handoff(name="session/start", state={"owner": "human"})
         for sidecar in self.sidecars:
-            archive_data = sidecar_archives.get(sidecar.name)
-            if archive_data is not None and archive_data["status"] == "error":
-                reset_data = self._sidecar_lifecycle_data(
-                    sidecar=sidecar.name,
-                    status="skipped",
-                    reason="tape.reset",
-                    cause="archive_failed",
-                )
-            else:
-                reset_data = await self._try_reset_sidecar(sidecar, reason="tape.reset")
-            if archive_data is not None:
-                await self.append_event("sidecar.archive", archive_data, context=False)
+            reset_data = await self._try_reset_sidecar(sidecar, reason="tape.reset")
             await self.append_event("sidecar.reset", reset_data, context=False)
-        return f"Archived: {archive_path}" if archive_path else "ok"
 
     def session_tape(self, session_id: str, workspace: Path, context: TapeContext | None = None) -> Tape:
         workspace_hash = hashlib.md5(str(workspace.resolve()).encode("utf-8"), usedforsecurity=False).hexdigest()[:16]

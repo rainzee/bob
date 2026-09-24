@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from bub.builtin.context import default_tape_context
@@ -16,9 +14,9 @@ def test_tape_module_exports_only_tape_primitives() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_tool_call_without_content_replays_with_its_result(tmp_path: Path) -> None:
+async def test_legacy_tool_call_without_content_replays_with_its_result() -> None:
     store = InMemoryTapeStore()
-    tape = Tape(tmp_path, AsyncTapeStoreAdapter(store), default_tape_context()).scoped("test-tape")
+    tape = Tape(AsyncTapeStoreAdapter(store), default_tape_context()).scoped("test-tape")
     await tape.ensure_bootstrap_anchor()
     calls = [{"id": "call-1", "type": "function", "function": {"name": "inspect", "arguments": "{}"}}]
     store.append("test-tape", TapeEntry(id=0, kind="tool_call", payload={"calls": calls}))
@@ -32,8 +30,8 @@ async def test_legacy_tool_call_without_content_replays_with_its_result(tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content", ["", "done"])
-async def test_text_only_response_remains_a_standalone_assistant_message(tmp_path: Path, content: str) -> None:
-    tape = Tape(tmp_path, AsyncTapeStoreAdapter(InMemoryTapeStore()), default_tape_context()).scoped("test-tape")
+async def test_text_only_response_remains_a_standalone_assistant_message(content: str) -> None:
+    tape = Tape(AsyncTapeStoreAdapter(InMemoryTapeStore()), default_tape_context()).scoped("test-tape")
     await tape.ensure_bootstrap_anchor()
     await tape.record_chat(run_id="run-1", system_prompt=None, new_messages=[], response_text=content)
 
@@ -41,9 +39,9 @@ async def test_text_only_response_remains_a_standalone_assistant_message(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_tape_fork_binds_temporary_fork_store_to_scoped_tape(tmp_path: Path) -> None:
+async def test_tape_fork_binds_temporary_fork_store_to_scoped_tape() -> None:
     parent = InMemoryTapeStore()
-    root = Tape(tmp_path, AsyncTapeStoreAdapter(parent), TapeContext()).scoped("test-tape")
+    root = Tape(AsyncTapeStoreAdapter(parent), TapeContext()).scoped("test-tape")
 
     async with root.fork_tape(merge_back=True) as forked:
         first_store = forked.store
@@ -66,8 +64,8 @@ async def test_tape_fork_binds_temporary_fork_store_to_scoped_tape(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_tape_info_reports_last_token_cache_hit_rate(tmp_path: Path) -> None:
-    tape = Tape(tmp_path, AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
+async def test_tape_info_reports_last_token_cache_hit_rate() -> None:
+    tape = Tape(AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
     await tape.record_chat(
         run_id="run-1",
         system_prompt=None,
@@ -88,8 +86,8 @@ async def test_tape_info_reports_last_token_cache_hit_rate(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_tape_info_omits_cache_hit_rate_when_usage_has_no_cache_details(tmp_path: Path) -> None:
-    tape = Tape(tmp_path, AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
+async def test_tape_info_omits_cache_hit_rate_when_usage_has_no_cache_details() -> None:
+    tape = Tape(AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
     await tape.record_chat(
         run_id="run-1",
         system_prompt=None,
@@ -104,7 +102,7 @@ async def test_tape_info_omits_cache_hit_rate_when_usage_has_no_cache_details(tm
 
 
 @pytest.mark.asyncio
-async def test_context_excluded_entries_do_not_reach_custom_context_selectors(tmp_path: Path) -> None:
+async def test_context_excluded_entries_do_not_reach_custom_context_selectors() -> None:
     def select_events(entries, _context):
         return [
             {"role": "assistant", "content": str(entry.payload.get("name"))}
@@ -113,7 +111,6 @@ async def test_context_excluded_entries_do_not_reach_custom_context_selectors(tm
         ]
 
     tape = Tape(
-        tmp_path,
         AsyncTapeStoreAdapter(InMemoryTapeStore()),
         TapeContext(anchor=None, select=select_events),
     ).scoped("test-tape")

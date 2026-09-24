@@ -19,9 +19,8 @@ from bub.streaming import AsyncStreamEvents, StreamEvent
 from bub.tape import Tape, TapeContext
 
 
-def _fake_tape(home: Path) -> Tape:
+def _fake_tape() -> Tape:
     return Tape(
-        archive_path=home / "tapes",
         store=AsyncTapeStoreAdapter(InMemoryTapeStore()),
         context=TapeContext(),
     )
@@ -33,7 +32,7 @@ class FakeAgent:
         self.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
         # A real in-memory async tape so load_state's recovery path runs against
         # the same store the tests write `model_switch` events to.
-        self.tape = tape if tape is not None else _fake_tape(home)
+        self.tape = tape if tape is not None else _fake_tape()
         self.run_calls: list[tuple[str, str, dict[str, object]]] = []
         self.run_stream_calls: list[tuple[str, str, dict[str, object], str | None]] = []
 

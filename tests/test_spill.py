@@ -50,9 +50,9 @@ def _page_field(page: str, name: str) -> str:
     return next(line.removeprefix(prefix) for line in page.splitlines() if line.startswith(prefix))
 
 
-def _root_tape(tmp_path: Path, store: TapeStore, *, threshold: int = 1) -> Tape:
+def _root_tape(store: TapeStore, *, threshold: int = 1) -> Tape:
     spill = SpillStore(SpillSettings(threshold=threshold))
-    return Tape(tmp_path, AsyncTapeStoreAdapter(store), default_tape_context(), sidecars=(spill,)).scoped("session")
+    return Tape(AsyncTapeStoreAdapter(store), default_tape_context(), sidecars=(spill,)).scoped("session")
 
 
 async def _read_page(
@@ -75,7 +75,7 @@ async def _read_page(
 @pytest.mark.asyncio
 async def test_oversized_result_is_bounded_and_readable_across_merge(tmp_path: Path) -> None:
     parent = FileTapeStore(tmp_path / "tapes")
-    root = _root_tape(tmp_path, parent)
+    root = _root_tape(parent)
     output = ("alpha🙂beta\n" * 5000) + "the-end"
 
     async with root.fork_tape() as tape:
@@ -124,7 +124,7 @@ async def test_oversized_result_is_bounded_and_readable_across_merge(tmp_path: P
 @pytest.mark.asyncio
 async def test_spill_configuration_preserves_results_that_should_not_be_spilled(tmp_path: Path) -> None:
     parent = InMemoryTapeStore()
-    root = _root_tape(tmp_path, parent, threshold=100)
+    root = _root_tape(parent, threshold=100)
 
     async with root.fork_tape() as tape:
         context = ToolContext(tape=tape, run_id="run-1")
@@ -146,7 +146,7 @@ async def test_spill_configuration_preserves_results_that_should_not_be_spilled(
         assert small_error.error is not None
         assert small_error.tool_results == [small_error.error.as_dict()]
 
-    disabled = _root_tape(tmp_path, parent, threshold=0).scoped("disabled")
+    disabled = _root_tape(parent, threshold=0).scoped("disabled")
     async with disabled.fork_tape() as tape:
         execution = await _spill_executor().execute_async(
             [(Tool(name="large", handler=lambda: "x" * 20_000), {})],
@@ -158,7 +158,7 @@ async def test_spill_configuration_preserves_results_that_should_not_be_spilled(
 @pytest.mark.parametrize("output", [{"value": "x" * 20_000}, ["x" * 20_000]])
 @pytest.mark.asyncio
 async def test_oversized_structured_result_is_spilled_as_json(tmp_path: Path, output: object) -> None:
-    root = _root_tape(tmp_path, InMemoryTapeStore(), threshold=100)
+    root = _root_tape(InMemoryTapeStore(), threshold=100)
 
     async with root.fork_tape() as tape:
         context = ToolContext(tape=tape, run_id="run-1")
@@ -187,7 +187,7 @@ async def test_spill_runs_after_other_result_hooks(tmp_path: Path) -> None:
     plugin_manager.register(BatteryImpl(None), name="batteries")  # type: ignore[arg-type]
     plugin_manager.register(ExpandResult(), name="expand-result")
     executor = ToolExecutor(hooks=AgentHooks(HookRuntime(plugin_manager)))
-    root = _root_tape(tmp_path, InMemoryTapeStore(), threshold=100)
+    root = _root_tape(InMemoryTapeStore(), threshold=100)
 
     async with root.fork_tape() as tape:
         execution = await executor.execute_async(
@@ -223,7 +223,7 @@ async def test_failure_replacement_is_used_for_spill_check(
     plugin_manager.register(BatteryImpl(None), name="batteries")  # type: ignore[arg-type]
     plugin_manager.register(ReplaceFailure(), name="replace-failure")
     executor = ToolExecutor(hooks=AgentHooks(HookRuntime(plugin_manager)))
-    root = _root_tape(tmp_path, InMemoryTapeStore(), threshold=100)
+    root = _root_tape(InMemoryTapeStore(), threshold=100)
 
     def fail() -> None:
         raise RuntimeError(error_message)
@@ -245,7 +245,7 @@ async def test_failure_replacement_is_used_for_spill_check(
 
 @pytest.mark.asyncio
 async def test_oversized_tool_error_is_spilled_and_remains_a_failure(tmp_path: Path) -> None:
-    root = _root_tape(tmp_path, InMemoryTapeStore(), threshold=100)
+    root = _root_tape(InMemoryTapeStore(), threshold=100)
     error_message = "failure detail " * 1000
 
     def fail() -> None:
@@ -269,7 +269,7 @@ async def test_oversized_tool_error_is_spilled_and_remains_a_failure(tmp_path: P
 @pytest.mark.asyncio
 async def test_temporary_fork_discards_spilled_content(tmp_path: Path) -> None:
     parent = InMemoryTapeStore()
-    root = _root_tape(tmp_path, parent)
+    root = _root_tape(parent)
 
     async with root.fork_tape(merge_back=False) as tape:
         context = ToolContext(tape=tape, run_id="run-1")
@@ -285,7 +285,7 @@ async def test_temporary_fork_discards_spilled_content(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_handle_and_invalid_read_bounds_are_friendly(tmp_path: Path) -> None:
-    root = _root_tape(tmp_path, InMemoryTapeStore())
+    root = _root_tape(InMemoryTapeStore())
     context = ToolContext(tape=root)
 
     assert "no spilled tool result" in await spill_read.run(handle="missing", context=context)
@@ -300,9 +300,9 @@ def test_spill_read_uses_the_builtin_tool_naming_convention() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tape_archive_preserves_spilled_results_and_clears_the_session(tmp_path: Path) -> None:
+async def test_tape_reset_clears_spilled_results_from_every_mounted_tape() -> None:
     parent = InMemoryTapeStore()
-    root = _root_tape(tmp_path, parent)
+    root = _root_tape(parent)
     sidecar = root.sidecar_tape_name(SPILL_SIDECAR_NAME)
     await root.ensure_bootstrap_anchor()
 
@@ -317,18 +317,20 @@ async def test_tape_archive_preserves_spilled_results_and_clears_the_session(tmp
         await tape.record_chat(
             run_id="run-1",
             system_prompt=None,
-            new_messages=[{"role": "user", "content": "archive this"}],
+            new_messages=[{"role": "user", "content": "clear this"}],
             response_text=None,
             tool_calls=[{"id": "call-1", "type": "function", "function": {"name": "large", "arguments": "{}"}}],
             tool_results=execution.tool_results,
         )
 
-    result = await root.reset(archive=True)
+    assert parent.read(sidecar) is not None
+    await root.reset()
 
-    main_archive = Path(result.removeprefix("Archived: "))
-    spill_archives = list(tmp_path.glob(f"{sidecar}.jsonl.*.bak"))
-    assert main_archive.exists()
-    assert len(spill_archives) == 1
-    assert handle in main_archive.read_text(encoding="utf-8")
-    assert handle in spill_archives[0].read_text(encoding="utf-8")
+    main_entries = parent.read("session") or []
+    assert [entry.kind for entry in main_entries] == ["anchor", "event", "event"]
+    assert [entry.payload.get("name") for entry in main_entries if entry.kind == "event"] == [
+        "handoff",
+        "sidecar.reset",
+    ]
+    assert parent.read(sidecar) is None
     assert "no spilled tool result" in await _read_page(ToolContext(tape=root), handle)
