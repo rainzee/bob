@@ -25,7 +25,6 @@ from bub.store import AsyncTapeStore, AsyncTapeStoreAdapter, InMemoryTapeStore, 
 from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape, TapeContext
 from bub.tools import Tool, model_tools
-from bub.tracing import Span, current_span
 from bub.turn import TurnState
 from bub.utils import workspace_from_state
 
@@ -152,7 +151,7 @@ class Agent:
             state: Mutable turn state. None loads state through framework hooks
                 using this agent's store; supplied state skips that loading.
                 The current agent is always bound into the state.
-            model: Per-turn override, ahead of the state and configured model.
+            model: Per-turn override, ahead of the state and the agent's own model.
             allowed_skills: Case-insensitive skill names available to this turn;
                 None leaves discovery unrestricted.
             allowed_tools: Instance tool names or model aliases for the agent loop;
@@ -166,88 +165,40 @@ class Agent:
         raise exceptions. This method does not render or dispatch outbound messages,
         call save-state hooks, or serialize concurrent turns in the same session.
         """
-        span = Span(
-            "invoke_agent bub",
-            {
-                "gen_ai.operation.name": "invoke_agent",
-                "gen_ai.agent.name": "bub",
-                "gen_ai.conversation.id": session_id,
-            },
-        )
-        span.messages("gen_ai.input.messages", [{"role": "user", "content": prompt}])
         stack = AsyncExitStack()
         try:
-            with span.activate():
-                if not prompt:
-                    events = self._events_from_iterable([
-                        StreamEvent("text", {"delta": "error: empty prompt"}),
-                        StreamEvent("final", {"text": "error: empty prompt", "ok": False}),
-                    ])
-                else:
-                    if state is None:
-                        state = await self.framework.build_state(session_id, {"_runtime_agent": self})
-                    state["_runtime_agent"] = self
-                    if model is None:
-                        model = state.get("model")
-                    if reasoning_effort is not None:
-                        state["reasoning_effort"] = reasoning_effort
-                    state.setdefault("session_id", session_id)
-                    state.setdefault("_runtime_workspace", str(self.framework.workspace))
-                    tape = self.tape.session_tape(
-                        session_id, workspace_from_state(state), context=replace(self.tape.context, state=state)
-                    )
-                    # Keep the tape fork open until the stream closes, even if it is never consumed.
-                    tape = await stack.enter_async_context(
-                        tape.fork_tape(merge_back=not session_id.startswith("temp/"))
-                    )
-                    await tape.ensure_bootstrap_anchor()
-                    events = await self._agent_loop(
-                        tape=tape,
-                        prompt=prompt,
-                        model=model,
-                        allowed_skills=allowed_skills,
-                        allowed_tools=allowed_tools,
-                    )
-        except BaseException as exc:
-            span.fail(exc)
-            try:
-                with span.activate():
-                    await stack.aclose()
-            finally:
-                span.end()
+            if not prompt:
+                events = self._events_from_iterable([
+                    StreamEvent("text", {"delta": "error: empty prompt"}),
+                    StreamEvent("final", {"text": "error: empty prompt", "ok": False}),
+                ])
+            else:
+                if state is None:
+                    state = await self.framework.build_state(session_id, {"_runtime_agent": self})
+                state["_runtime_agent"] = self
+                if model is None:
+                    model = state.get("model")
+                if reasoning_effort is not None:
+                    state["reasoning_effort"] = reasoning_effort
+                state.setdefault("session_id", session_id)
+                state.setdefault("_runtime_workspace", str(self.framework.workspace))
+                tape = self.tape.session_tape(
+                    session_id, workspace_from_state(state), context=replace(self.tape.context, state=state)
+                )
+                # Keep the tape fork open until the stream closes, even if it is never consumed.
+                tape = await stack.enter_async_context(tape.fork_tape(merge_back=not session_id.startswith("temp/")))
+                await tape.ensure_bootstrap_anchor()
+                events = await self._agent_loop(
+                    tape=tape,
+                    prompt=prompt,
+                    model=model,
+                    allowed_skills=allowed_skills,
+                    allowed_tools=allowed_tools,
+                )
+        except BaseException:
+            await stack.aclose()
             raise
-        return AsyncStreamEvents(
-            self._trace_events(events, span),
-            state=events._state,
-            on_close=stack.aclose,
-            span=span,
-        )
-
-    @staticmethod
-    async def _trace_events(events: AsyncStreamEvents, span: Span) -> AsyncGenerator[StreamEvent, None]:
-        messages: list[dict[str, Any]] = []
-        text: list[str] = []
-        calls: list[dict[str, Any]] = []
-        try:
-            async with aclosing(events):
-                async for event in events:
-                    if span.recording:
-                        if event.kind == "text":
-                            text.append(str(event.data.get("delta", "")))
-                        elif event.kind == "tool_call":
-                            calls = event.data.get("tool_calls", [])
-                            messages.append({"role": "assistant", "content": "".join(text), "tool_calls": calls})
-                            text.clear()
-                        elif event.kind == "tool_result":
-                            for call, result in zip(calls, event.data.get("tool_results", []), strict=False):
-                                messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
-                        elif event.kind == "error":
-                            span.fail(RuntimeError(str(event.data.get("message", "agent failed"))))
-                    yield event
-        finally:
-            if text:
-                messages.append({"role": "assistant", "content": "".join(text)})
-            span.messages("gen_ai.output.messages", messages)
+        return AsyncStreamEvents(events, state=events._state, on_close=stack.aclose)
 
     async def _agent_loop(
         self,
@@ -428,12 +379,6 @@ class Agent:
         resolved_model = model or self.model_runner.model
 
         model_tools_for_call = model_tools(tools)
-        if (span := current_span()) and span.recording:
-            span.set(**{
-                "gen_ai.tool.definitions": [
-                    tool.to_schema()["function"] | {"type": "function"} for tool in model_tools_for_call
-                ]
-            })
         return self.model_runner.run(
             tape=tape,
             model=resolved_model,

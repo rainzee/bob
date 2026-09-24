@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from bub.errors import BubError
-from bub.tracing import Span
 
 
 @dataclass
@@ -30,12 +28,10 @@ class AsyncStreamEvents:
         *,
         state: StreamState | None = None,
         on_close: Callable[[], Awaitable[None]] | None = None,
-        span: Span | None = None,
     ) -> None:
         self._iterator = iterator
         self._state = state or StreamState()
         self._on_close = on_close
-        self._span = span
         self._closed = False
 
     def __aiter__(self) -> AsyncIterator[StreamEvent]:
@@ -45,22 +41,17 @@ class AsyncStreamEvents:
         if self._closed:
             raise StopAsyncIteration
         try:
-            # Detach before returning an event to the consumer, even across tasks.
-            with self._span.activate() if self._span else nullcontext():
-                return await anext(self._iterator)
+            return await anext(self._iterator)
         except StopAsyncIteration:
             await self._close()
             raise
-        except BaseException as exc:
-            if self._span:
-                self._span.fail(exc)
+        except BaseException:
             await self._close()
             raise
 
     async def aclose(self) -> None:
         """Close the source and release resources, including before first iteration."""
-        if not self._closed and self._span:
-            self._span.set(**{"bub.cancelled": True})
+
         await self._close()
 
     async def _close(self) -> None:
@@ -68,20 +59,11 @@ class AsyncStreamEvents:
             return
         self._closed = True
         try:
-            with self._span.activate() if self._span else nullcontext():
-                try:
-                    if close := getattr(self._iterator, "aclose", None):
-                        await close()
-                finally:
-                    if self._on_close is not None:
-                        await self._on_close()
-        except BaseException as exc:
-            if self._span:
-                self._span.fail(exc)
-            raise
+            if close := getattr(self._iterator, "aclose", None):
+                await close()
         finally:
-            if self._span:
-                self._span.end()
+            if self._on_close is not None:
+                await self._on_close()
 
     @property
     def error(self) -> BubError | None:
