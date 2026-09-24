@@ -1,27 +1,23 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install check vulture test clean-build build publish build-and-publish
+.PHONY: help install check test clean-build build publish build-and-publish
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "%-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: ## Sync Python deps and install prek hooks
+install: ## Sync Python dependencies
 	@echo "==> Syncing Python dependencies with uv"
 	uv sync
-	@echo "==> Installing prek hooks"
-	uv run prek install
 
-check: ## Validate lockfile, run prek across the repo, and type-check src
+check: ## Validate the lockfile, lint, check formatting, and type-check src
 	@echo "==> Verifying uv.lock matches pyproject.toml"
 	uv lock --locked
-	@echo "==> Running prek hooks"
-	uv run prek run -a
+	@echo "==> Running ruff"
+	uv run ruff check .
+	@echo "==> Checking formatting"
+	uv run ruff format --check .
 	@echo "==> Running mypy on src"
 	uv run mypy src
-
-vulture: ## Run the optional unused-code check
-	@echo "==> Running vulture via prek"
-	uv run prek run vulture --hook-stage manual --all-files
 
 test: ## Run pytest with doctests enabled
 	@echo "==> Running pytest with doctests"

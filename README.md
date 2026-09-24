@@ -55,7 +55,7 @@ pass; build your own with `@tool` / `Tool.from_callable` and inject storage with
 directory (`BUB_HOME` is read only when neither is given). There are no
 process-wide configuration or tool registries.
 
-From a checkout, `uv sync` is enough; for local development use `make install` so `prek` hooks are installed too.
+From a checkout, `uv sync` is enough; `make install` is a thin wrapper around it.
 
 ## Why Bub
 
