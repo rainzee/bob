@@ -318,3 +318,36 @@ async def test_tool_call_text_survives_into_next_request_after_tape_reload(tmp_p
         {"role": "tool", "content": "bytes differ", "tool_call_id": "call-compare", "name": "compare"},
         {"role": "user", "content": "Continue."},
     ]
+
+
+@pytest.mark.asyncio
+async def test_multimodal_parts_survive_a_tool_call_and_a_tape_reload(tmp_path: Path) -> None:
+    """A prompt the caller sent must still be there on the next step and after a restart.
+
+    The tape is the conversation: anything recorded from the prompt has to come back
+    out of it unchanged, or the model silently loses what it was asked about.
+    """
+
+    parts = [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        {"type": "input_audio", "input_audio": {"data": "BBBB", "format": "wav"}},
+    ]
+    client = RecordingClient([tool_calls_chunk([call("noop")])], [text_chunk("done")])
+    runner = ModelRunner(client=client)
+    tools = [Tool(name="noop", handler=lambda: "done")]
+    root = _tape(tmp_path)
+
+    async with root.fork_tape() as tape:
+        await tape.ensure_bootstrap_anchor()
+        async for _ in runner.run(tape=tape, model="m", tools=tools, system_prompt=None, prompt=parts):
+            pass
+
+    async for _ in runner.run(
+        tape=await _reload(tmp_path), model="m", tools=tools, system_prompt=None, prompt="Continue."
+    ):
+        pass
+
+    for step, request in enumerate(client.requests, start=1):
+        user_messages = [m for m in request.messages if m["role"] == "user" and isinstance(m["content"], list)]
+        assert user_messages[0]["content"] == parts, f"step {step} lost part of the prompt"

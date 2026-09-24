@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, time
 from datetime import date as date_type
 from pathlib import Path
-from typing import Any, Protocol, Self, TypeIs, overload
+from typing import Protocol, Self, TypeIs, overload
 
 from loguru import logger
 
@@ -280,25 +280,7 @@ class ForkTapeStore:
         entries = itertools.chain(parent_entries, this_entries)
         return itertools.islice(entries, query._limit) if query._limit is not None else entries
 
-    @staticmethod
-    def _redact_prompt(prompt: list[dict]) -> Any:
-        if not isinstance(prompt, list):
-            return prompt
-        new_prompt = []
-        for part in prompt:
-            if part.get("type") == "text":
-                new_prompt.append(part)
-        return new_prompt
-
-    @staticmethod
-    def _redact_payload(payload: dict) -> None:
-        if "content" in payload:
-            payload["content"] = ForkTapeStore._redact_prompt(payload["content"])
-        elif "prompt" in payload:
-            payload["prompt"] = ForkTapeStore._redact_prompt(payload["prompt"])
-
     async def append(self, tape: str, entry: TapeEntry) -> None:
-        self._redact_payload(entry.payload)
         if tape not in self._managed_tapes:
             await self._parent.append(tape, entry)
             return
