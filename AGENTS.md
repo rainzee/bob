@@ -20,13 +20,13 @@ Tests live in `tests/`.
 
 ## Build, Test, and Development Commands
 
-- `make install`: sync the Python dependencies.
+- `uv sync`: sync the Python dependencies.
 - `uv run ruff check .`: run Ruff directly when you only want lint feedback.
 - `uv run ruff format .`: format the tree.
 - `uv run mypy src`: run mypy directly against `src/`.
 - `uv run pytest -q`: run the main test suite without doctests.
-- `make test`: run pytest with doctests enabled.
-- `make check`: lock validation, Ruff, formatting, and typing.
+- `uv run python -m pytest --doctest-modules`: run pytest with doctests enabled.
+- `uv lock --locked` then Ruff, formatting, and typing: validate the lockfile and the tree.
 
 ## Coding Style & Naming Conventions
 

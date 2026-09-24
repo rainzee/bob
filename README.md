@@ -218,9 +218,9 @@ Bub is shaped by one constraint: real collaboration is messier than a solo demo.
 ## Development
 
 ```bash
-make install
-make check
-make test
+uv sync
+uv run ruff check .
+uv run pytest --doctest-modules
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

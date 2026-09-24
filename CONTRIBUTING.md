@@ -65,12 +65,10 @@ cd bub
 Then, install the Python environment with:
 
 ```bash
-make install
+uv sync
 ```
 
-4. If you prefer the minimal path, `uv sync` is enough; `make install` wraps it.
-
-5. Create a branch for local development:
+4. Create a branch for local development:
 
 ```bash
 git checkout -b name-of-your-bugfix-or-feature
@@ -78,21 +76,24 @@ git checkout -b name-of-your-bugfix-or-feature
 
 Now you can make your changes locally.
 
-6. Don't forget to add test cases for your added functionality to the `tests` directory.
+5. Don't forget to add test cases for your added functionality to the `tests` directory.
 
-7. When you're done making changes, check that your changes pass the formatting tests.
+6. When you're done making changes, check that your changes pass the formatting tests.
 
 ```bash
-make check
+uv lock --locked
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
 ```
 
 Now, validate that all unit tests are passing:
 
 ```bash
-make test
+uv run python -m pytest --doctest-modules
 ```
 
-9. Commit your changes and push your branch to GitHub:
+7. Commit your changes and push your branch to GitHub:
 
 ```bash
 git add .
@@ -100,7 +101,7 @@ git commit -m "Your detailed description of your changes."
 git push origin name-of-your-bugfix-or-feature
 ```
 
-10. Submit a pull request through the GitHub website.
+8. Submit a pull request through the GitHub website.
 
 # Pull Request Guidelines
 
