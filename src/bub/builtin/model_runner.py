@@ -1,31 +1,15 @@
-"""LLM completion and model-output helpers for the builtin agent."""
+"""The model-call boundary, and the parsing of a streamed response into events"""
 
 from __future__ import annotations
 
 import asyncio
-import inspect
-from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any, Literal, cast
+from typing import Any, Protocol
 
-from any_llm import AnyLLM
-from any_llm.constants import LLMProvider
-from any_llm.providers.anthropic.base import BaseAnthropicProvider
-from any_llm.providers.openai.base import BaseOpenAIProvider
-from any_llm.types.completion import (
-    ChatCompletion,
-    ChatCompletionChunk,
-    ChatCompletionMessage,
-    ChatCompletionMessageFunctionToolCall,
-    ChatCompletionMessageToolCall,
-    ChoiceDeltaToolCall,
-    Function,
-    ParsedChatCompletion,
-)
-from loguru import logger
 from pydantic import TypeAdapter, ValidationError
 
 from bub.errors import BubError, ErrorKind
@@ -34,200 +18,62 @@ from bub.streaming import AsyncStreamEvents, StreamEvent, StreamState
 from bub.tape import Tape
 from bub.tools import Tool, ToolContext, ToolExecutor
 
+TOOL_ARGUMENTS_ADAPTER = TypeAdapter(dict[str, Any])
+
 
 @dataclass(frozen=True)
-class ModelCandidate:
-    """一次尝试使用的模型: 解析出的 provider 与 model_id, 以及调用方写的原名"""
+class ChatRequest:
+    """One chat call handed to the host's client
 
-    provider: LLMProvider
-    model_id: str
-    name: str
+    Messages and tools use the OpenAI chat-completions shape, which is also the shape
+    the tape records and ``Tool.to_schema`` produces
+    """
 
-
-TOOL_ARGUMENTS_ADAPTER = TypeAdapter(dict[str, Any])
-CompletionResult = ChatCompletion | ParsedChatCompletion[Any] | AsyncIterator[ChatCompletionChunk]
-GOOGLE_FILE_CONTENT_PROVIDERS = frozenset({LLMProvider.GEMINI, LLMProvider.VERTEXAI})
-
-_AUDIO_FORMAT_TO_MIME_TYPE = {
-    "aiff": "audio/aiff",
-    "flac": "audio/flac",
-    "m4a": "audio/mp4",
-    "mp3": "audio/mpeg",
-    "ogg": "audio/ogg",
-    "wav": "audio/wav",
-    "webm": "audio/webm",
-}
+    run_id: str
+    model: str
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]] | None = None
+    max_tokens: int | None = None
+    reasoning_effort: str | None = None
+    options: Mapping[str, Any] = field(default_factory=dict)
 
 
-def _audio_mime_type(audio_format: str) -> str:
-    return _AUDIO_FORMAT_TO_MIME_TYPE.get(audio_format, f"audio/{audio_format}")
+class ChatClient(Protocol):
+    """The host's own model call, implemented with whichever SDK it prefers
 
+    Yield OpenAI chat-completion chunks as JSON mappings: each chunk carries
+    ``choices[i].delta``, and the last one may carry ``usage``. A ``reasoning``
+    delta is surfaced as a reasoning event; a provider that names it otherwise
+    should rename it in its adapter.
+    """
 
-def _provider_value(value: str | dict[str, str] | None, provider: str) -> str | None:
-    if isinstance(value, dict):
-        return value.get(provider)
-    return value
-
-
-def _extra_options(llm: AnyLLM, *, stream: bool) -> dict[str, Any]:
-    """Return provider-specific extra completion options."""
-    if isinstance(llm, BaseAnthropicProvider):
-        return {"cache_control": {"type": "ephemeral"}}
-    elif stream and isinstance(llm, BaseOpenAIProvider):
-        return {"stream_options": {"include_usage": True}}
-    return {}
-
-
-def _adapt_messages_for_provider(messages: list[dict[str, Any]], provider: LLMProvider) -> list[dict[str, Any]]:
-    """Translate canonical multimodal blocks when a provider uses a different wire format."""
-    if provider not in GOOGLE_FILE_CONTENT_PROVIDERS:
-        return messages
-
-    adapted_messages: list[dict[str, Any]] = []
-    for message in messages:
-        content = message.get("content")
-        if not isinstance(content, list):
-            adapted_messages.append(message)
-            continue
-
-        adapted_content: list[Any] = []
-        changed = False
-        for part in content:
-            if not isinstance(part, dict):
-                adapted_content.append(part)
-                continue
-
-            if part.get("type") == "video_url":
-                video_url = part.get("video_url")
-                url = video_url.get("url") if isinstance(video_url, dict) else None
-                if isinstance(url, str) and url:
-                    adapted_content.append({"type": "file", "file": {"file_data": url}})
-                    changed = True
-                    continue
-            elif part.get("type") == "input_audio":
-                input_audio = part.get("input_audio")
-                data = input_audio.get("data") if isinstance(input_audio, dict) else None
-                audio_format = input_audio.get("format") if isinstance(input_audio, dict) else None
-                if isinstance(data, str) and data and isinstance(audio_format, str) and audio_format:
-                    mime_type = _audio_mime_type(audio_format)
-                    file_data = f"data:{mime_type};base64,{data}"
-                    adapted_content.append({"type": "file", "file": {"file_data": file_data}})
-                    changed = True
-                    continue
-            adapted_content.append(part)
-
-        adapted_messages.append({**message, "content": adapted_content} if changed else message)
-    return adapted_messages
+    def stream(self, request: ChatRequest) -> AsyncIterator[dict[str, Any]]: ...
 
 
 class ModelRunner:
     def __init__(
         self,
         *,
-        model: str,
-        fallback_models: Iterable[str] = (),
-        api_key: str | dict[str, str] | None = None,
-        api_base: str | dict[str, str] | None = None,
-        client_args: dict[str, Any] | None = None,
-        completion_args: dict[str, Any] | None = None,
+        client: ChatClient,
         max_tokens: int | None = None,
+        options: Mapping[str, Any] | None = None,
         timeout_seconds: float | None = None,
         hooks: Hooks | None = None,
     ) -> None:
-        """Create a runner that builds provider clients and streams one completion at a time.
+        """Create a runner that turns one turn step into one chat call.
 
         Args:
-            model: Default ``provider:model_id`` for turns that do not override it.
-            fallback_models: Additional models tried in order when the primary call fails.
-            api_key: Provider key, or a mapping keyed by provider name.
-            api_base: Provider endpoint, or a mapping keyed by provider name.
-            client_args: Extra keyword arguments for the underlying client constructor.
-            completion_args: Extra keyword arguments added to every completion call.
-            max_tokens: Per-call output cap; None leaves it to the provider.
+            client: The host's chat client.
+            max_tokens: Per-call output cap; None leaves it to the client.
+            options: Extra options added to every request for the client to interpret.
             timeout_seconds: Per-call timeout; None means no timeout is applied.
             hooks: Callbacks run around each model call.
         """
-        self.model = model
-        self.fallback_models = tuple(fallback_models)
-        self.api_key = api_key
-        self.api_base = api_base
-        self.client_args = dict(client_args or {})
-        self.completion_args = dict(completion_args or {})
+        self.client = client
         self.max_tokens = max_tokens
+        self.options = dict(options or {})
         self.timeout_seconds = timeout_seconds
         self.hooks = hooks
-
-    def model_candidates(self, model: str) -> list[ModelCandidate]:
-        """Return the model to try first followed by the fallbacks, in order."""
-
-        names = [model]
-        if model == self.model:
-            names.extend(self.fallback_models)
-        candidates: list[ModelCandidate] = []
-        for name in names:
-            provider, model_id = AnyLLM.split_model_provider(name)
-            candidates.append(ModelCandidate(provider=provider, model_id=model_id, name=name))
-        return candidates
-
-    def model_client_kwargs(self, provider: str) -> dict[str, Any]:
-        """Return the client constructor arguments for one provider."""
-
-        return {
-            **self.client_args,
-            "api_key": _provider_value(self.api_key, provider),
-            "api_base": _provider_value(self.api_base, provider),
-        }
-
-    def iter_llm_clients(self, model: str) -> Iterator[tuple[ModelCandidate, AnyLLM]]:
-        for candidate in self.model_candidates(model):
-            client_kwargs = self.model_client_kwargs(candidate.provider)
-            yield (
-                candidate,
-                self.create_llm_client(candidate, client_kwargs),
-            )
-
-    @staticmethod
-    def create_llm_client(candidate: ModelCandidate, client_kwargs: dict[str, Any]) -> AnyLLM:
-        return AnyLLM.create(candidate.provider, **client_kwargs)
-
-    async def completion_response(
-        self,
-        *,
-        model: str,
-        messages: list[dict[str, Any]],
-        tools: list[Tool],
-        max_tokens: int | None = None,
-        reasoning_effort: str | None = None,
-    ) -> CompletionResult:
-        tool_payloads = [tool.to_schema() for tool in tools] or None
-        clients = list(self.iter_llm_clients(model))
-        completion_error: Exception | None = None
-        for index, (candidate, llm) in enumerate(clients):
-            try:
-                streaming = llm.SUPPORTS_COMPLETION_STREAMING
-                completion_messages = _adapt_messages_for_provider(messages, candidate.provider)
-                completion_kwargs = {
-                    **self.completion_args,
-                    **_extra_options(llm, stream=streaming),
-                    "model": candidate.model_id,
-                    "messages": completion_messages,
-                    "tools": tool_payloads,
-                    "stream": streaming,
-                }
-                resolved_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
-                if resolved_max_tokens is not None:
-                    completion_kwargs["max_tokens"] = resolved_max_tokens
-                if reasoning_effort is not None:
-                    completion_kwargs["reasoning_effort"] = reasoning_effort
-                return cast("CompletionResult", await llm.acompletion(**completion_kwargs))
-            except Exception as exc:
-                if completion_error is None:
-                    completion_error = exc
-                if index == len(clients) - 1:
-                    raise completion_error from None
-                logger.warning("model candidate failed; trying fallback model={} error={}", candidate.name, exc)
-
-        raise RuntimeError("no model candidates available")
 
     def run(
         self,
@@ -303,29 +149,24 @@ class ModelRunner:
             tool_calls = output.tool_calls
             if tool_calls:
                 tool_map = {tool_item.name: tool_item for tool_item in tools}
-                serialized_tool_calls = [tool_call.model_dump(exclude_none=True) for tool_call in tool_calls]
-                tool_invocations = [tool_invocation_from_native(tool_call, tool_map) for tool_call in tool_calls]
-                yield StreamEvent("tool_call", {"tool_calls": serialized_tool_calls})
+                tool_invocations = [tool_invocation(tool_call, tool_map) for tool_call in tool_calls]
+                yield StreamEvent("tool_call", {"tool_calls": tool_calls})
                 context = ToolContext(tape=tape, run_id=run_id, state=tape.context.state)
-                execution = await ToolExecutor(hooks=self.hooks).execute_async(
-                    tool_invocations,
-                    context=context,
-                )
+                execution = await ToolExecutor(hooks=self.hooks).execute_async(tool_invocations, context=context)
                 await self.record_chat(
                     tape=tape,
                     run_id=run_id,
                     system_prompt=system_prompt,
                     new_messages=new_messages,
                     response_text=output.text or None,
-                    tool_calls=serialized_tool_calls,
+                    tool_calls=tool_calls,
                     tool_results=execution.tool_results,
-                    response=output.response,
                     model=request.model,
                     usage=state.usage,
                 )
                 yield StreamEvent("tool_result", {"tool_results": execution.tool_results})
                 yield StreamEvent(
-                    "final", {"ok": True, "tool_calls": serialized_tool_calls, "tool_results": execution.tool_results}
+                    "final", {"ok": True, "tool_calls": tool_calls, "tool_results": execution.tool_results}
                 )
                 return
 
@@ -336,7 +177,6 @@ class ModelRunner:
                 system_prompt=system_prompt,
                 new_messages=new_messages,
                 response_text=text,
-                response=output.response,
                 model=request.model,
                 usage=state.usage,
             )
@@ -344,35 +184,50 @@ class ModelRunner:
 
         return AsyncStreamEvents(iterator(), state=state)
 
-    def _stream_completion(
+    async def _stream_completion(
         self,
         request: LlmCallRequest,
         tools: list[Tool],
         tape: Tape,
         state: StreamState,
         output: ModelOutputAccumulator,
-    ) -> AsyncStreamEvents:
-        async def iterator() -> AsyncGenerator[StreamEvent, None]:
+    ) -> AsyncGenerator[StreamEvent, None]:
+        chat_request = ChatRequest(
+            run_id=request.run_id,
+            model=request.model,
+            messages=list(request.messages),
+            tools=[tool.to_schema() for tool in tools] or None,
+            max_tokens=request.max_tokens,
+            reasoning_effort=tape.context.state.get("reasoning_effort"),
+            options=self.options,
+        )
+        chunks = self.client.stream(chat_request)
+        try:
             async with asyncio.timeout(self.timeout_seconds):
-                completion = await self.completion_response(
-                    model=request.model,
-                    messages=list(request.messages),
-                    tools=tools,
-                    max_tokens=request.max_tokens,
-                    reasoning_effort=tape.context.state.get("reasoning_effort"),
-                )
-                try:
-                    async with aclosing(self._completion_events(completion, state, output)) as events:
-                        async for item in events:
-                            yield item
-                finally:
-                    close = getattr(completion, "aclose", None) or getattr(completion, "close", None)
-                    if close is not None:
-                        result = close()
-                        if inspect.isawaitable(result):
-                            await result
+                async for chunk in chunks:
+                    for event in self._chunk_events(chunk, state, output):
+                        yield event
+        finally:
+            if close := getattr(chunks, "aclose", None):
+                await close()
 
-        return AsyncStreamEvents(iterator(), state=state)
+    def _chunk_events(
+        self,
+        chunk: Mapping[str, Any],
+        state: StreamState,
+        output: ModelOutputAccumulator,
+    ) -> Iterable[StreamEvent]:
+        if usage := chunk.get("usage"):
+            state.usage = dict(usage)
+        for choice in chunk.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if reasoning := delta.get("reasoning"):
+                yield StreamEvent("reasoning", {"delta": reasoning_text(reasoning)})
+            if content := delta.get("content"):
+                output.add_text(content)
+                yield StreamEvent("text", {"delta": content})
+            if tool_calls := delta.get("tool_calls"):
+                output.merge_delta_tool_calls(tool_calls)
 
     @staticmethod
     def generate_run_id() -> str:
@@ -393,7 +248,7 @@ class ModelRunner:
         result = LlmCallResult(
             run_id=request.run_id,
             text=output.text or None,
-            tool_calls=[call.model_dump(exclude_none=True) for call in output.tool_calls],
+            tool_calls=output.tool_calls,
             usage=state.usage,
             error=error,
             duration_ms=duration_ms,
@@ -460,8 +315,6 @@ class ModelRunner:
         tool_calls: list[dict[str, Any]] | None = None,
         tool_results: list[Any] | None = None,
         error: BubError | None = None,
-        response: Any | None = None,
-        provider: str | None = None,
         model: str | None = None,
         usage: dict[str, Any] | None = None,
     ) -> None:
@@ -474,139 +327,78 @@ class ModelRunner:
             tool_calls=tool_calls,
             tool_results=tool_results,
             error=error,
-            response=response,
-            provider=provider,
             model=model,
             usage=usage,
         )
 
-    async def _completion_events(
-        self,
-        completion: CompletionResult,
-        state: StreamState,
-        output: ModelOutputAccumulator,
-    ) -> AsyncGenerator[StreamEvent, None]:
-        if isinstance(completion, ChatCompletion):
-            if usage := Tape._extract_usage(completion):
-                state.usage = usage
-            output.response = completion
-            message = completion.choices[0].message
-            for event in self._completion_message_events(message, output):
-                yield event
-            return
 
-        async for chunk in completion:
-            async for event in self._completion_chunk_events(chunk, state, output):
-                yield event
-
-    def _completion_message_events(
-        self,
-        message: ChatCompletionMessage,
-        output: ModelOutputAccumulator,
-    ) -> Iterable[StreamEvent]:
-        if message.reasoning:
-            yield StreamEvent("reasoning", {"delta": self.reasoning_text(message.reasoning)})
-        if message.content:
-            output.add_text(message.content)
-            yield StreamEvent("text", {"delta": message.content})
-        output.add_message_tool_calls(cast("Iterable[ChatCompletionMessageToolCall]", message.tool_calls or []))
-
-    async def _completion_chunk_events(
-        self,
-        chunk: ChatCompletionChunk,
-        state: StreamState,
-        output: ModelOutputAccumulator,
-    ) -> AsyncGenerator[StreamEvent, None]:
-        if usage := Tape._extract_usage(chunk):
-            state.usage = usage
-        for choice in chunk.choices:
-            delta = choice.delta
-            if delta.reasoning:
-                yield StreamEvent("reasoning", {"delta": self.reasoning_text(delta.reasoning)})
-            if delta.content:
-                output.add_text(delta.content)
-                yield StreamEvent("text", {"delta": delta.content})
-            if delta.tool_calls:
-                output.merge_delta_tool_calls(delta.tool_calls)
-
-    @staticmethod
-    def reasoning_text(reasoning: object) -> str:
-        content = getattr(reasoning, "content", reasoning)
-        return "" if content is None else str(content)
+def reasoning_text(reasoning: object) -> str:
+    content = reasoning.get("content") if isinstance(reasoning, Mapping) else reasoning
+    return "" if content is None else str(content)
 
 
 @dataclass
 class StreamToolCall:
     id: str | None = None
-    type: Literal["function"] | None = None
     name: str | None = None
     arguments: str = ""
 
-    def merge(self, delta: ChoiceDeltaToolCall) -> None:
-        if delta.id:
-            self.id = delta.id
-        if delta.type:
-            self.type = delta.type
-        if delta.function is None:
-            return
-        if delta.function.name:
-            if self.name is None or self.name == delta.function.name:
-                self.name = delta.function.name
-            else:
-                self.name += delta.function.name
-        if delta.function.arguments:
-            self.arguments += delta.function.arguments
+    def merge(self, delta: Mapping[str, Any]) -> None:
+        if delta.get("id"):
+            self.id = str(delta["id"])
+        function = delta.get("function") or {}
+        name = function.get("name")
+        if name:
+            # Some providers split the function name across deltas.
+            self.name = name if self.name is None or self.name == name else self.name + name
+        arguments = function.get("arguments")
+        if arguments:
+            self.arguments += arguments
 
-    def as_tool_call(self, index: int) -> ChatCompletionMessageFunctionToolCall:
-        return ChatCompletionMessageFunctionToolCall(
-            id=self.id or f"call_{index}",
-            type=self.type or "function",
-            function=Function(name=self.name or "", arguments=self.arguments or "{}"),
-        )
+    def as_message(self, index: int) -> dict[str, Any]:
+        return {
+            "id": self.id or f"call_{index}",
+            "type": "function",
+            "function": {"name": self.name or "", "arguments": self.arguments or "{}"},
+        }
 
 
 class ModelOutputAccumulator:
     def __init__(self) -> None:
-        self.response: ChatCompletion | ParsedChatCompletion[Any] | None = None
         self._text_parts: list[str] = []
-        self._message_calls: list[ChatCompletionMessageToolCall] = []
         self._stream_calls: dict[int, StreamToolCall] = {}
 
     def add_text(self, text: str) -> None:
         self._text_parts.append(text)
 
-    def add_message_tool_calls(self, calls: Iterable[ChatCompletionMessageToolCall]) -> None:
-        self._message_calls.extend(calls)
-
-    def merge_delta_tool_calls(self, deltas: Iterable[ChoiceDeltaToolCall]) -> None:
-        for delta in deltas:
-            self._stream_calls.setdefault(delta.index, StreamToolCall()).merge(delta)
+    def merge_delta_tool_calls(self, deltas: Iterable[Mapping[str, Any]]) -> None:
+        for position, delta in enumerate(deltas):
+            index = delta.get("index")
+            self._stream_calls.setdefault(index if index is not None else position, StreamToolCall()).merge(delta)
 
     @property
     def text(self) -> str:
         return "".join(self._text_parts)
 
     @property
-    def tool_calls(self) -> list[ChatCompletionMessageToolCall]:
-        if self._message_calls:
-            return list(self._message_calls)
-        return [self._stream_calls[index].as_tool_call(index) for index in sorted(self._stream_calls)]
+    def tool_calls(self) -> list[dict[str, Any]]:
+        return [call.as_message(index) for index, call in sorted(self._stream_calls.items())]
 
 
-def tool_invocation_from_native(
-    tool_call: ChatCompletionMessageToolCall,
+def tool_invocation(
+    tool_call: Mapping[str, Any],
     tool_map: dict[str, Tool],
 ) -> tuple[Tool, dict[str, Any]]:
     """Resolve a model tool call to (runtime tool, arguments).
 
     An unknown tool name is not treated as a fatal error: it is surfaced as a
-    placeholder ``Tool`` so the invocation flows through ``ToolExecutor`` and
-    builtin hooks (e.g. ``before_tool_call``) can recover it into a guidance
-    ``tool_result`` instead of interrupting the turn. If no hook replaces the
-    call, the placeholder raises a clear tool error rather than succeeding with
-    an empty result.
+    placeholder ``Tool`` so the invocation flows through ``ToolExecutor`` and a
+    ``before_tool_call`` callback can recover it into a guidance ``tool_result``
+    instead of interrupting the turn. If no callback replaces the call, the
+    placeholder raises a clear tool error rather than succeeding with an empty
+    result.
     """
-    tool_name, arguments = parse_native_function_call(tool_call)
+    tool_name, arguments = parse_tool_call(tool_call)
     tool_obj = tool_map.get(tool_name)
     if tool_obj is None:
 
@@ -617,11 +409,18 @@ def tool_invocation_from_native(
     return tool_obj, arguments
 
 
-def parse_native_function_call(tool_call: ChatCompletionMessageToolCall) -> tuple[str, dict[str, Any]]:
-    if tool_call.type != "function":
+def parse_tool_call(tool_call: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    if tool_call.get("type") not in (None, "function"):
+        raise BubError(ErrorKind.INVALID_INPUT, "Expected a function tool call with JSON object arguments.")
+    function = tool_call.get("function") or {}
+    name = function.get("name")
+    if not isinstance(name, str) or not name:
+        raise BubError(ErrorKind.INVALID_INPUT, "Expected a function tool call with a name.")
+    arguments = function.get("arguments")
+    if arguments is not None and not isinstance(arguments, str):
         raise BubError(ErrorKind.INVALID_INPUT, "Expected a function tool call with JSON object arguments.")
     try:
-        arguments = TOOL_ARGUMENTS_ADAPTER.validate_json(tool_call.function.arguments or "{}")
+        parsed = TOOL_ARGUMENTS_ADAPTER.validate_json(arguments or "{}")
     except ValidationError as exc:
         raise BubError(ErrorKind.INVALID_INPUT, "Expected a function tool call with JSON object arguments.") from exc
-    return tool_call.function.name, arguments
+    return name, parsed

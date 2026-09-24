@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from conftest import RecordingClient
 
 from bub.builtin import Agent
 from bub.builtin.hooks import BuiltinHooks
@@ -34,12 +35,16 @@ def framework(tmp_path: Path) -> BubFramework:
 async def test_sdk_recovers_only_its_store_and_honors_explicit_overrides(
     framework: BubFramework, has_saved_state: bool, override: bool
 ) -> None:
-    other = Agent(framework, model="test:other", tools=[], tape_store=InMemoryTapeStore(), skill_dirs=[])
+    other = Agent(
+        framework, model="test:other", client=RecordingClient(), tools=[], tape_store=InMemoryTapeStore(), skill_dirs=[]
+    )
     other_tape = other.tape.session_tape("shared", framework.workspace)
     await other_tape.append_event("model_switch", {"model": "test:other"})
     await other_tape.append_event("reasoning_effort_switch", {"reasoning_effort": "low"})
 
-    agent = Agent(framework, model="test:model", tools=[], tape_store=InMemoryTapeStore(), skill_dirs=[])
+    agent = Agent(
+        framework, model="test:model", client=RecordingClient(), tools=[], tape_store=InMemoryTapeStore(), skill_dirs=[]
+    )
     tape = agent.tape.session_tape("shared", framework.workspace)
     if has_saved_state:
         await tape.append_event("model_switch", {"model": "test:saved"})
@@ -55,7 +60,7 @@ async def test_sdk_recovers_only_its_store_and_honors_explicit_overrides(
     )
     assert [event.kind async for event in stream] == ["text", "final"]
     call = runner.call_args.kwargs
-    expected_model = "test:saved" if has_saved_state else agent.model_runner.model
+    expected_model = "test:saved" if has_saved_state else agent.model
     assert call["model"] == ("test:explicit" if override else expected_model)
     state = call["tape"].context.state
     assert state.get("reasoning_effort") == ("medium" if override else "high" if has_saved_state else None)
@@ -77,7 +82,14 @@ def test_instance_tool_names_resolve_aliases_and_exclusions_from_one_index() -> 
 @pytest.mark.asyncio
 async def test_agent_allowlist_accepts_unregistered_instance_tool(framework: BubFramework) -> None:
     tool = Tool.from_callable(lambda: "found", name="sdk.lookup")
-    agent = Agent(framework, model="test:model", tools=[tool], tape_store=InMemoryTapeStore(), skill_dirs=[])
+    agent = Agent(
+        framework,
+        model="test:model",
+        client=RecordingClient(),
+        tools=[tool],
+        tape_store=InMemoryTapeStore(),
+        skill_dirs=[],
+    )
     runner = Mock(side_effect=lambda **kwargs: _reply())
     agent.model_runner.run = runner
     stream = await agent.run_stream(session_id="sdk", prompt="lookup", allowed_tools=[" SDK_LOOKUP "])
@@ -90,7 +102,12 @@ async def test_agent_allowlist_accepts_unregistered_instance_tool(framework: Bub
 async def test_subagent_uses_parent_instance_tools(framework: BubFramework, allowed_tools: list[str] | None) -> None:
     tool = Tool.from_callable(lambda: "found", name="sdk.lookup")
     agent = Agent(
-        framework, model="test:model", tools=[tool, run_subagent], tape_store=InMemoryTapeStore(), skill_dirs=[]
+        framework,
+        model="test:model",
+        client=RecordingClient(),
+        tools=[tool, run_subagent],
+        tape_store=InMemoryTapeStore(),
+        skill_dirs=[],
     )
     runner = Mock(side_effect=lambda **kwargs: _reply())
     agent.model_runner.run = runner

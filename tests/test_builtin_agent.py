@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from any_llm.types.completion import ChatCompletionChunk
+from conftest import RecordingClient
 
 import bub.builtin.tools  # noqa: F401  — registers builtin tools (incl. `model`)
 from bub import BubFramework
@@ -27,12 +28,17 @@ from bub.tools import tool
 
 class _FakeModelRunner(ModelRunner):
     def __init__(self, **options: Any) -> None:
-        super().__init__(model="test:model", **options)
-        self.completion_kwargs: dict[str, Any] | None = None
+        super().__init__(client=RecordingClient(), **options)
+        self.run_calls: list[dict[str, Any]] = []
 
-    async def completion_response(self, **kwargs: Any) -> AsyncIterator[ChatCompletionChunk]:
-        self.completion_kwargs = kwargs
-        return _chat_stream("done")
+    def run(self, **kwargs: Any) -> AsyncStreamEvents:
+        self.run_calls.append(kwargs)
+
+        async def events() -> AsyncIterator[StreamEvent]:
+            yield StreamEvent("text", {"delta": "done"})
+            yield StreamEvent("final", {"ok": True, "text": "done"})
+
+        return AsyncStreamEvents(events())
 
 
 def _make_agent() -> Agent:
@@ -46,6 +52,7 @@ def _make_agent() -> Agent:
         agent = Agent.__new__(Agent)
 
     agent.framework = framework
+    agent.model = "test:model"
     agent.tools = {tool_item.name: tool_item for tool_item in battery_tools()}
     agent.tape_store = None
     agent.skill_dirs = ()
@@ -53,7 +60,7 @@ def _make_agent() -> Agent:
     agent.sidecars = ()
     agent.hooks = Hooks()
     agent.max_steps = None
-    agent.model_runner = _FakeModelRunner(api_key="k", api_base="b", client_args={})
+    agent.model_runner = _FakeModelRunner()
     return agent
 
 
@@ -220,9 +227,8 @@ async def test_agent_run_passes_model_to_llm() -> None:
     )
     [event async for event in result]
 
-    completion_kwargs = _model_runner(agent).completion_kwargs
-    assert completion_kwargs is not None
-    assert completion_kwargs["model"] == "openai:gpt-4o"
+    (run_call,) = _model_runner(agent).run_calls
+    assert run_call["model"] == "openai:gpt-4o"
 
 
 @pytest.mark.asyncio
@@ -250,9 +256,8 @@ async def test_agent_run_model_defaults_to_none() -> None:
     result = await agent.run_stream(session_id="user/s1", prompt="hello", state={"_runtime_workspace": "/tmp"})  # noqa: S108
     [event async for event in result]
 
-    completion_kwargs = _model_runner(agent).completion_kwargs
-    assert completion_kwargs is not None
-    assert completion_kwargs["model"] == "test:model"
+    (run_call,) = _model_runner(agent).run_calls
+    assert run_call["model"] == "test:model"
 
 
 @pytest.mark.asyncio
@@ -293,8 +298,8 @@ async def test_agent_loop_continues_without_injecting_a_user_message() -> None:
 async def test_agent_run_model_override_does_not_mutate_default() -> None:
     """A per-call model override must not leak into the agent's configured model.
 
-    The override is resolved per turn (``model or self.model_runner.model``) and
-    forwarded to any-llm; it must never be written back to the runner's model.
+    The override is resolved per turn (``model or self.model``) and
+    forwarded to the client; it must never be written back to the agent model.
     This is the agent-layer half of the guarantee that a session-scoped model
     switch (state['model'] -> run_stream(model=...)) cannot bleed across
     sessions the way a process-global env var would.
@@ -302,7 +307,7 @@ async def test_agent_run_model_override_does_not_mutate_default() -> None:
     agent = _make_agent()
     fork_capture = _ForkCapture()
     agent.tape = _FakeTapeFactory(fork_capture)  # type: ignore[assignment]
-    default_model = agent.model_runner.model
+    default_model = agent.model
 
     result = await agent.run_stream(
         session_id="user/s1",
@@ -312,10 +317,9 @@ async def test_agent_run_model_override_does_not_mutate_default() -> None:
     )
     [event async for event in result]
 
-    completion_kwargs = _model_runner(agent).completion_kwargs
-    assert completion_kwargs is not None
-    assert completion_kwargs["model"] == "openai:gpt-4o"
-    assert agent.model_runner.model == default_model
+    (run_call,) = _model_runner(agent).run_calls
+    assert run_call["model"] == "openai:gpt-4o"
+    assert agent.model == default_model
 
 
 @pytest.mark.asyncio
@@ -346,10 +350,9 @@ async def test_agent_run_resolves_allowed_tool_aliases_and_limits_prompt() -> No
     )
     [event async for event in result]
 
-    completion_kwargs = _model_runner(agent).completion_kwargs
-    assert completion_kwargs is not None
-    assert [tool.name for tool in completion_kwargs["tools"]] == ["tests_allowed_agent_tool"]
-    system_prompt = completion_kwargs["messages"][0]["content"]
+    (run_call,) = _model_runner(agent).run_calls
+    assert [tool.name for tool in run_call["tools"]] == ["tests_allowed_agent_tool"]
+    system_prompt = run_call["system_prompt"]
     assert "- tests_allowed_agent_tool(): Allowed tool" in system_prompt
     assert "tests_denied_agent_tool" not in system_prompt
 
@@ -376,12 +379,19 @@ def test_agent_requires_an_explicit_model(tmp_path: Path) -> None:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
 
     with pytest.raises(TypeError, match="model"):
-        Agent(framework)
+        Agent(framework, client=RecordingClient())
+
+
+def test_agent_requires_a_client(tmp_path: Path) -> None:
+    framework = BubFramework(workspace=tmp_path, home=tmp_path)
+
+    with pytest.raises(TypeError, match="client"):
+        Agent(framework, model="openai:test")
 
 
 def test_agent_has_no_settings_or_config_object(tmp_path: Path) -> None:
     framework = BubFramework(workspace=tmp_path, home=tmp_path)
-    agent = Agent(framework, model="openai:test")
+    agent = Agent(framework, model="openai:test", client=RecordingClient())
 
     assert not hasattr(agent, "settings")
     assert not hasattr(framework, "config")

@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from conftest import RecordingClient, text_chunk
 
 from bub.errors import BubError
 from bub.hooks import (
@@ -198,38 +199,29 @@ class TestAfterLlmCall:
 class TestModelRunnerHookIntegration:
     """Regression tests for PR #255 review findings (effective request, exactly-once)."""
 
-    def _runner_and_tape(self, hooks: Hooks, captured: dict):
+    def _runner_and_tape(self, hooks: Hooks, client: RecordingClient):
         from bub.builtin.model_runner import ModelRunner
         from bub.store import AsyncTapeStoreAdapter, InMemoryTapeStore
         from bub.tape import Tape, TapeContext
 
-        class FakeRunner(ModelRunner):
-            async def completion_response(self, *, model, messages, tools, max_tokens=None, reasoning_effort=None):
-                captured.update(model=model, max_tokens=max_tokens)
-
-                async def chunks():
-                    return
-                    yield  # pragma: no cover
-
-                return chunks()
-
-        runner = FakeRunner(model="openai:orig", max_tokens=100, hooks=hooks)
+        runner = ModelRunner(client=client, max_tokens=100, hooks=hooks)
         store = AsyncTapeStoreAdapter(InMemoryTapeStore())
         tape = Tape(store, TapeContext(anchor=None)).scoped("t1")
         return runner, tape
 
     @pytest.mark.asyncio
-    async def test_rewritten_model_and_max_tokens_reach_provider_and_tape(self) -> None:
+    async def test_rewritten_model_and_max_tokens_reach_the_client_and_tape(self) -> None:
         def reroute(request: LlmCallRequest, state: dict) -> LlmCallRequest:
             return replace(request, model="anthropic:new", max_tokens=42)
 
-        captured: dict = {}
-        runner, tape = self._runner_and_tape(make_hooks(before_llm_call=[reroute]), captured)
+        client = RecordingClient()
+        runner, tape = self._runner_and_tape(make_hooks(before_llm_call=[reroute]), client)
         events = runner.run(tape=tape, model="openai:orig", tools=[], system_prompt=None, prompt="hi")
         async for _ in events:
             pass
 
-        assert captured == {"model": "anthropic:new", "max_tokens": 42}
+        assert client.requests[0].model == "anthropic:new"
+        assert client.requests[0].max_tokens == 42
         entries = list(await tape.store.fetch_all(tape.query().kinds("event")))
         run_events = [e for e in entries if e.payload.get("name") == "run"]
         assert run_events[-1].payload["data"]["model"] == "anthropic:new"
@@ -241,16 +233,8 @@ class TestModelRunnerHookIntegration:
         def observe(request: LlmCallRequest, result: LlmCallResult, state: dict) -> None:
             observed.append(result)
 
-        captured: dict = {}
-        runner, tape = self._runner_and_tape(make_hooks(after_llm_call=[observe]), captured)
-
-        async def fake_events(completion, state, output):
-            from bub.streaming import StreamEvent
-
-            yield StreamEvent("text", {"delta": "a"})
-            yield StreamEvent("text", {"delta": "b"})
-
-        runner._completion_events = fake_events  # type: ignore[method-assign]
+        client = RecordingClient([text_chunk("a"), text_chunk("b")])
+        runner, tape = self._runner_and_tape(make_hooks(after_llm_call=[observe]), client)
         events = runner.run(tape=tape, model="openai:orig", tools=[], system_prompt=None, prompt="hi")
         iterator = events.__aiter__()
         await iterator.__anext__()
@@ -267,8 +251,7 @@ class TestModelRunnerHookIntegration:
         def observe(request: LlmCallRequest, result: LlmCallResult, state: dict) -> None:
             observed.append(result)
 
-        captured: dict = {}
-        runner, tape = self._runner_and_tape(make_hooks(after_llm_call=[observe]), captured)
+        runner, tape = self._runner_and_tape(make_hooks(after_llm_call=[observe]), RecordingClient())
         events = runner.run(tape=tape, model="openai:orig", tools=[], system_prompt=None, prompt="hi")
         async for _ in events:
             pass

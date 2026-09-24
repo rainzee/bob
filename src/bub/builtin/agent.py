@@ -16,7 +16,7 @@ from typing import Any
 from loguru import logger
 
 from bub.builtin.context import default_tape_context
-from bub.builtin.model_runner import ModelRunner
+from bub.builtin.model_runner import ChatClient, ModelRunner
 from bub.framework import BubFramework
 from bub.hooks import Hooks
 from bub.sidecars import TapeSidecar
@@ -39,11 +39,8 @@ class Agent:
         framework: BubFramework,
         *,
         model: str,
-        fallback_models: Collection[str] = (),
-        api_key: str | dict[str, str] | None = None,
-        api_base: str | dict[str, str] | None = None,
-        client_args: Mapping[str, Any] | None = None,
-        completion_args: Mapping[str, Any] | None = None,
+        client: ChatClient,
+        chat_options: Mapping[str, Any] | None = None,
         max_tokens: int | None = None,
         max_steps: int | None = None,
         model_timeout_seconds: float | None = None,
@@ -58,13 +55,10 @@ class Agent:
 
         Args:
             framework: Configured runtime supplying paths, resources and callbacks.
-            model: Default ``provider:model_id`` for turns that do not override it.
-            fallback_models: Additional models tried in order when the primary call fails.
-            api_key: Provider key, or a mapping keyed by provider name.
-            api_base: Provider endpoint, or a mapping keyed by provider name.
-            client_args: Extra keyword arguments for the underlying client constructor.
-            completion_args: Extra keyword arguments added to every model call.
-            max_tokens: Per-call output cap; None leaves it to the provider.
+            model: Default model identifier; the client decides what it means.
+            client: The host's chat client.
+            chat_options: Extra options passed to every chat request.
+            max_tokens: Per-call output cap; None leaves it to the client.
             max_steps: Tool-loop step limit; None means no limit.
             model_timeout_seconds: Per-call timeout; None means no timeout is applied.
             tools: Tools available to this instance. An empty collection means the
@@ -81,6 +75,7 @@ class Agent:
         The caller owns the lifecycle of an explicitly supplied store.
         """
         self.framework = framework
+        self.model = model
         self.tools = {tool.name: tool for tool in tools}
         self.tape_store = tape_store
         self.skill_dirs = tuple(skill_dirs or ())
@@ -89,13 +84,9 @@ class Agent:
         self.hooks = framework.hooks + (hooks or Hooks())
         self.max_steps = max_steps
         self.model_runner = ModelRunner(
-            model=model,
-            fallback_models=fallback_models,
-            api_key=api_key,
-            api_base=api_base,
-            client_args=dict(client_args or {}),
-            completion_args=dict(completion_args or {}),
+            client=client,
             max_tokens=max_tokens,
+            options=chat_options,
             timeout_seconds=model_timeout_seconds,
             hooks=self.hooks,
         )
@@ -210,7 +201,7 @@ class Agent:
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncStreamEvents:
         next_prompt: str | list[dict] = prompt
-        display_model = model or self.model_runner.model
+        display_model = model or self.model
         await tape.append_event(
             "loop.start",
             {
@@ -240,7 +231,7 @@ class Agent:
         allowed_skills: Collection[str] | None = None,
         allowed_tools: Collection[str] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
-        display_model = model or self.model_runner.model
+        display_model = model or self.model
         prompt_text = prompt if isinstance(prompt, str) else _extract_text_from_parts(prompt)
         # Only the first step carries the caller's message. Later steps continue on
         # the tape, which already ends with the assistant tool calls and their results.
@@ -376,7 +367,7 @@ class Agent:
         system_prompt = await self._system_prompt(
             prompt_text, state=tape.context.state, allowed_skills=allowed_skills, tools=tools
         )
-        resolved_model = model or self.model_runner.model
+        resolved_model = model or self.model
 
         model_tools_for_call = model_tools(tools)
         return self.model_runner.run(

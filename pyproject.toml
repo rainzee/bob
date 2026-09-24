@@ -23,7 +23,6 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
-    "any-llm-sdk[anthropic]",
     "loguru>=0.7.2",
     "rapidfuzz>=3.14.3",
     "aiohttp>=3.13.3",
